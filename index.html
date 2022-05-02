@@ -10,6 +10,7 @@ datasetteWorker.onmessage = (event) => {
   console.log(event.data);
   document.getElementById("output").innerHTML = event.data.text;
   document.getElementById("status").innerHTML = event.data.status;
+  window.scrollTo({top: 0, left: 0});
 };
 </script>
 <form>
