@@ -45,21 +45,35 @@ function isExternal(url) {
   return new URL(url).host != 'localhost';
 }
 
+function loadPath(path) {
+  path = path.split("#")[0].replace("http://localhost", "");
+  console.log({path});
+  history.pushState({path: path}, path, "#" + path);
+  datasetteWorker.postMessage({path});
+}
+
 let output = document.getElementById('output');
 output.addEventListener('click', (ev => {
-  ev.stopPropagation();
-  ev.preventDefault();
   if (ev.srcElement && ev.srcElement.nodeName == "A" && ev.srcElement.href) {
+    ev.stopPropagation();
+    ev.preventDefault();
     let href = ev.srcElement.getAttribute("href");
     if (isExternal(href)) {
       window.open(href);
       return;
     }
-    let path = href.split("#")[0].replace("http://localhost", "");
-    console.log({path});
-    history.pushState({path: path}, path, "#" + path);
-    datasetteWorker.postMessage({path});
+    loadPath(href);
   }
+}), true);
+
+output.addEventListener('submit', (ev => {
   console.log(ev);
+  ev.stopPropagation();
+  ev.preventDefault();
+  if (ev.target && ev.target && ev.target.nodeName == "FORM" && ev.target.method.toLowerCase() == "get") {
+    let qs = new URLSearchParams(new FormData(ev.target)).toString();
+    let action = ev.target.getAttribute("action");
+    loadPath(`${action}?${qs}`);
+  }
 }), true);
 </script>
