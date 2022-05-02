@@ -4,7 +4,7 @@
 <h1>Web worker demo</h1>
 
 <script>
-const datasetteWorker = new Worker("/webworker.js");
+const datasetteWorker = new Worker("webworker.js");
 
 datasetteWorker.onmessage = (event) => {
   console.log(event.data);
