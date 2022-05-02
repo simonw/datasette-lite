@@ -8,9 +8,15 @@ async function startDatasette() {
   await self.pyodide.runPythonAsync(`
   # Grab that fixtures.db database
   from pyodide.http import pyfetch
-  response = await pyfetch("https://latest.datasette.io/fixtures.db")
-  with open("fixtures.db", "wb") as fp:
-      fp.write(await response.bytes())
+  names = []
+  for name, url in (
+      ("fixtures.db", "https://latest.datasette.io/fixtures.db"),
+      ("content.db", "https://datasette.io/content.db"),
+  ):
+      response = await pyfetch(url)
+      with open(name, "wb") as fp:
+          fp.write(await response.bytes())
+      names.append(name)
 
   import micropip
   await micropip.install(
@@ -26,7 +32,7 @@ async function startDatasette() {
       keep_going=True
   )
   from datasette.app import Datasette
-  ds = Datasette(["fixtures.db"], memory=True)
+  ds = Datasette(names, memory=True)
   `);
 }
 
