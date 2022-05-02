@@ -8,7 +8,7 @@ async function startDatasette() {
   await self.pyodide.runPythonAsync(`
   # Grab that fixtures.db database
   from pyodide.http import pyfetch
-  response = await pyfetch("https:/latest.datasette.io/fixtures.db")
+  response = await pyfetch("https://latest.datasette.io/fixtures.db")
   with open("fixtures.db", "wb") as fp:
       fp.write(await response.bytes())
 
