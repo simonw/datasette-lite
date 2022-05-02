@@ -35,12 +35,27 @@ document.forms[0].onsubmit = function(ev) {
   datasetteWorker.postMessage({path});
 }
 // document.forms[0].submit();
+
+function isExternal(url) {
+  let startsWithProtocol = !!/^http:\/\/|https:\/\//.exec(url);
+  if (!startsWithProtocol) {
+    return false;
+  }
+  // Is it localhost?
+  return new URL(url).host != 'localhost';
+}
+
 let output = document.getElementById('output');
 output.addEventListener('click', (ev => {
   ev.stopPropagation();
   ev.preventDefault();
   if (ev.srcElement && ev.srcElement.nodeName == "A" && ev.srcElement.href) {
-    let path = ev.srcElement.getAttribute("href").split("#")[0];
+    let href = ev.srcElement.getAttribute("href");
+    if (isExternal(href)) {
+      window.open(href);
+      return;
+    }
+    let path = href.split("#")[0].replace("http://localhost", "");
     console.log({path});
     history.pushState({path: path}, path, "#" + path);
     datasetteWorker.postMessage({path});
