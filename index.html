@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<link rel="stylesheet" href="https://latest.datasette.io/-/static/app.css?cead5a">
+<div style="padding: 1em">
+<h1>Web worker demo</h1>
+
+<script>
+const datasetteWorker = new Worker("/webworker.js");
+
+datasetteWorker.onmessage = (event) => {
+  console.log(event.data);
+  document.getElementById("output").innerHTML = event.data.text;
+  document.getElementById("status").innerHTML = event.data.status;
+};
+</script>
+<form>
+<p><input id="path" type="text" style="width: 80%" value="/"><input type="submit" value="Go"></p>
+</form>
+<p id="status"></p>
+<hr></div>
+
+<div id="output"></div>
+
+<script>
+
+window.onpopstate = function(event) {
+  console.log(event);
+  datasetteWorker.postMessage({path: event.state.path});
+}
+
+document.forms[0].onsubmit = function(ev) {
+  ev.preventDefault();
+  var path = document.getElementById("path").value;
+  history.pushState({path: path}, path, "#" + path);
+  datasetteWorker.postMessage({path});
+}
+// document.forms[0].submit();
+let output = document.getElementById('output');
+output.addEventListener('click', (ev => {
+  ev.stopPropagation();
+  ev.preventDefault();
+  if (ev.srcElement && ev.srcElement.nodeName == "A" && ev.srcElement.href) {
+    let path = ev.srcElement.getAttribute("href");
+    console.log({path});
+    history.pushState({path: path}, path, "#" + path);
+    datasetteWorker.postMessage({path});
+  }
+  console.log(ev);
+}), true);
+</script>
