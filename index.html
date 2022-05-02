@@ -39,7 +39,7 @@ output.addEventListener('click', (ev => {
   ev.stopPropagation();
   ev.preventDefault();
   if (ev.srcElement && ev.srcElement.nodeName == "A" && ev.srcElement.href) {
-    let path = ev.srcElement.getAttribute("href");
+    let path = ev.srcElement.getAttribute("href").split("#")[0];
     console.log({path});
     history.pushState({path: path}, path, "#" + path);
     datasetteWorker.postMessage({path});
