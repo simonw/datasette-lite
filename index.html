@@ -117,6 +117,10 @@ datasetteWorker.onmessage = (event) => {
     html = `<pre style="padding: 0.5em">${escapeHtml(event.data.text)}</pre>`;
   }
   document.getElementById("output").innerHTML = html;
+  let title = document.getElementById("output").querySelector("title");
+  if (title) {
+    document.title = title.innerText;
+  }
   window.scrollTo({top: 0, left: 0});
   document.getElementById('loading-indicator').style.display = 'none';
 };
