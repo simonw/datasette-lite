@@ -46,7 +46,10 @@ self.onmessage = async (event) => {
     let [status, text] = await self.pyodide.runPythonAsync(
       `
       import json
-      response = await ds.client.get(${JSON.stringify(event.data.path)})
+      response = await ds.client.get(
+          ${JSON.stringify(event.data.path)},
+          follow_redirects=True
+      )
       [response.status_code, response.text]
       `
     );
