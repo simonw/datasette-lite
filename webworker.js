@@ -37,7 +37,12 @@ async function startDatasette(initialUrl) {
     await micropip.install("h11==0.12.0")
     await micropip.install("datasette==0.62a0")
     from datasette.app import Datasette
-    ds = Datasette(names, settings={"num_sql_threads": 0})
+    ds = Datasette(names, settings={
+        "num_sql_threads": 0,
+    }, metadata = {
+        "about": "Datasette Lite",
+        "about_url": "https://github.com/simonw/datasette-lite"
+    })
     `);
   } catch (error) {
     self.postMessage({error: error.message});
