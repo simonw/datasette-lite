@@ -91,6 +91,8 @@ textarea#sql-editor {
 
 <script>
 const datasetteWorker = new Worker("webworker.js");
+const initialUrl = new URLSearchParams(location.search).get('url');
+datasetteWorker.postMessage({type: 'startup', initialUrl});
 
 let loadingLogs = ["Loading..."];
 
@@ -113,7 +115,7 @@ datasetteWorker.onmessage = (event) => {
   }
   let html = '';
   if (event.data.error) {
-    html = `<h3>Error: ${event.data.error}</h3>`;
+    html = `<div style="padding: 0.5em"><h3>Error</h3><pre>${escapeHtml(event.data.error)}</pre></div>`;
   } else if (/^text\/html/.exec(event.data.contentType)) {
     html = event.data.text;
   } else if (/^application\/json/.exec(event.data.contentType)) {
@@ -132,6 +134,8 @@ datasetteWorker.onmessage = (event) => {
 </script>
 
 <div id="output"></div>
+
+<form id="load-custom"><p style="padding: 1em"><button type="button">Load database by URL to a SQLite DB</button></p></form>
 
 <script>
 
@@ -209,6 +213,36 @@ output.addEventListener('submit', (ev => {
     loadPath(`${action}?${qs}`);
   }
 }), true);
+
+async function checkDatabaseUrl(url) {
+  try {
+    response = (await fetch(url, {method: 'HEAD'}));
+    if (response.status != 200) {
+      return false;
+    }
+    if (response.headers.get('content-type') != 'application/octet-stream') {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
+document.querySelector('#load-custom button').addEventListener('click', async function(ev) {
+  ev.preventDefault();
+  let url = prompt("Enter a full URL to a SQLite .db file");
+  if (!url) {
+    return;
+  }
+  let valid = await checkDatabaseUrl(url);
+  if (valid) {
+    location.href = location.pathname + '?url=' + encodeURIComponent(url);
+  } else {
+    alert("That database URL could not be loaded");
+  }
+})
 </script>
 </body>
 </html>
