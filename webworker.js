@@ -26,20 +26,11 @@ async function startDatasette() {
       names.append(name)
 
   import micropip
-  await micropip.install(
-      "https://s3.amazonaws.com/simonwillison-cors-allowed-public/python_baseconv-1.2.2-py3-none-any.whl",
-      keep_going=True
-  )
-  await micropip.install(
-      "https://s3.amazonaws.com/simonwillison-cors-allowed-public/click_default_group-1.2.2-py3-none-any.whl",
-      keep_going=True
-  )
-  await micropip.install(
-      "https://s3.amazonaws.com/simonwillison-cors-allowed-public/datasette-0.61.1-py3-none-any.whl",
-      keep_going=True
-  )
+  # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
+  await micropip.install("h11==0.12.0")
+  await micropip.install("datasette==0.62a0")
   from datasette.app import Datasette
-  ds = Datasette(names, memory=True)
+  ds = Datasette(names, memory=True, settings={"num_sql_threads": 0})
   `);
 }
 
