@@ -151,10 +151,11 @@ function loadPath(path) {
 
 let output = document.getElementById('output');
 output.addEventListener('click', (ev => {
-  if (ev.srcElement && ev.srcElement.nodeName == "A" && ev.srcElement.href) {
+  var link = ev.srcElement.closest("a");
+  if (link && link.href) {
     ev.stopPropagation();
     ev.preventDefault();
-    let href = ev.srcElement.getAttribute("href");
+    let href = link.getAttribute("href");
     if (isExternal(href)) {
       window.open(href);
       return;
