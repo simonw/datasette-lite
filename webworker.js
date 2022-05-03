@@ -50,17 +50,17 @@ self.onmessage = async (event) => {
   await readyPromise;
   console.log(event, event.data);
   try {
-    let [status, text] = await self.pyodide.runPythonAsync(
+    let [status, contentType, text] = await self.pyodide.runPythonAsync(
       `
       import json
       response = await ds.client.get(
           ${JSON.stringify(event.data.path)},
           follow_redirects=True
       )
-      [response.status_code, response.text]
+      [response.status_code, response.headers.get("content-type"), response.text]
       `
     );
-    self.postMessage({status, text});
+    self.postMessage({status, contentType, text});
   } catch (error) {
     self.postMessage({ error: error.message });
   }
