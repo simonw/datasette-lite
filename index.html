@@ -131,7 +131,12 @@ window.onpopstate = function(event) {
   datasetteWorker.postMessage({path: event.state.path});
 }
 
-datasetteWorker.postMessage({path: "/"});
+// Start with path from location.hash, if available
+if (location.hash) {
+  datasetteWorker.postMessage({path: location.hash.replace(/^\#/, '')});
+} else {
+  datasetteWorker.postMessage({path: "/"});
+}
 
 function isExternal(url) {
   let startsWithProtocol = !!/^http:\/\/|https:\/\//.exec(url);
