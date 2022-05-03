@@ -1,10 +1,17 @@
 importScripts("https://cdn.jsdelivr.net/pyodide/dev/full/pyodide.js");
 
+function log(line) {
+  console.log({line})
+  self.postMessage({type: 'log', line: line});
+}
+
 async function startDatasette() {
-  self.pyodide = await loadPyodide({indexURL : "https://cdn.jsdelivr.net/pyodide/dev/full/"});
-  await pyodide.loadPackage('micropip');
-  await pyodide.loadPackage('ssl');
-  await pyodide.loadPackage('setuptools'); // For pkg_resources
+  self.pyodide = await loadPyodide({
+    indexURL: "https://cdn.jsdelivr.net/pyodide/dev/full/"
+  });
+  await pyodide.loadPackage('micropip', log);
+  await pyodide.loadPackage('ssl', log);
+  await pyodide.loadPackage('setuptools', log); // For pkg_resources
   await self.pyodide.runPythonAsync(`
   # Grab that fixtures.db database
   from pyodide.http import pyfetch
