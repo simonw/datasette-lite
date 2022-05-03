@@ -156,6 +156,17 @@ function isExternal(url) {
   return new URL(url).host != 'localhost';
 }
 
+function isFragmentLink(url) {
+  // Is this a #fragment on the current page?
+  let u = new URL(url);
+  return (
+    location.pathname == u.pathname &&
+    location.hostname == u.hostname &&
+    u.hash &&
+    u.hash != location.hash
+  );
+}
+
 function loadPath(path) {
   path = path.split("#")[0].replace("http://localhost", "");
   console.log({path});
@@ -169,6 +180,16 @@ output.addEventListener('click', (ev => {
   if (link && link.href) {
     ev.stopPropagation();
     ev.preventDefault();
+    if (isFragmentLink(link.href)) {
+      // Jump them to that element, but don't update the URL bar
+      // since we use # in the URL to mean something else
+      let fragment = new URL(link.href).hash.replace("#", "");
+      if (fragment) {
+        let el = document.getElementById(fragment);
+        el.scrollIntoView();
+      }
+      return;
+    }
     let href = link.getAttribute("href");
     if (isExternal(href)) {
       window.open(href);
