@@ -12,7 +12,7 @@ When you launch the demo, your browser will download and start executing a full 
 
 ## Opening other databases
 
-You can use this tool to open any SQLite database file that is hosted online and served with a `access-control-allow-origin: *` CORS header. Files served by GitHub Pages automatically include this header.
+You can use this tool to open any SQLite database file that is hosted online and served with a `access-control-allow-origin: *` CORS header. Files served by GitHub Pages automatically include this header, as do database files that have been published online [using datasette publish](https://docs.datasette.io/en/stable/publish.html).
 
 Copy the URL to the `.db` file and either paste it into the "Load database by URL" prompt, or construct a URL like the following:
 
