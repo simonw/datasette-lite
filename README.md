@@ -22,5 +22,5 @@ Copy the URL to the `.db` file and either paste it into the "Load database by UR
 
 Some examples to try out:
 
-- [Global Power Plants](https://lite.datasette.io/datasette-lite/?url=https://global-power-plants.datasettes.com/global-power-plants.db) - 33,000 power plants around the world
-- [United States members of congress](https://lite.datasette.io/datasette-lite/?url=https://congress-legislators.datasettes.com/legislators.db) - the example database from the [Learn SQL with Datasette](https://datasette.io/tutorials/learn-sql) tutorial
+- [Global Power Plants](https://lite.datasette.io/?url=https://global-power-plants.datasettes.com/global-power-plants.db) - 33,000 power plants around the world
+- [United States members of congress](https://lite.datasette.io/?url=https://congress-legislators.datasettes.com/legislators.db) - the example database from the [Learn SQL with Datasette](https://datasette.io/tutorials/learn-sql) tutorial
