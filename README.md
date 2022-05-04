@@ -4,6 +4,8 @@ Datasette running in your browser using WebAssembly and [Pyodide](https://pyodid
 
 Live tool: https://simonw.github.io/datasette-lite/
 
+More about this project: [Datasette Lite: a server-side Python web application running in a browser](https://simonwillison.net/2022/May/4/datasette-lite/)
+
 ## How this works
 
 Datasette Lite runs the full server-side Datasette Python web application directly in your browser, using the [Pyodide](https://pyodide.org) build of Python compiled to WebAssembly.
