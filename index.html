@@ -180,7 +180,7 @@ function loadPath(path) {
   path = path.split("#")[0].replace("http://localhost", "");
   console.log({path});
   history.pushState({path: path}, path, "#" + path);
-  useAnalytics && plausible('pageview', {u: location.href.replace('?url=', '')});
+  useAnalytics && plausible('pageview', {u: location.href.replace('?url=', '').replace('#', '/')});
   datasetteWorker.postMessage({path});
 }
 
