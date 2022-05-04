@@ -30,7 +30,7 @@ textarea#sql-editor {
   line-height: 1.4;
 }
 </style>
-<script defer data-domain="simonw.github.io" src="https://plausible.io/js/script.manual.js"></script>
+<script defer data-domain="lite.datasette.io" src="https://plausible.io/js/script.manual.js"></script>
 <script>window.plausible = window.plausible || function() { (window.plausible.q = window.plausible.q || []).push(arguments) }</script>
 </head>
 <body>
@@ -141,7 +141,7 @@ datasetteWorker.onmessage = (event) => {
 <form id="load-custom"><p style="padding: 1em"><button type="button">Load database by URL to a SQLite DB</button></p></form>
 
 <script>
-const useAnalytics = location.hostname == "simonw.github.io";
+const useAnalytics = location.hostname == "lite.datasette.io";
 useAnalytics && plausible('pageview');
 
 window.onpopstate = function(event) {
