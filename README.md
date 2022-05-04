@@ -2,7 +2,7 @@
 
 Datasette running in your browser using WebAssembly and [Pyodide](https://pyodide.org)
 
-Live tool: https://simonw.github.io/datasette-lite/
+Live tool: https://lite.datasette.io/
 
 More about this project: [Datasette Lite: a server-side Python web application running in a browser](https://simonwillison.net/2022/May/4/datasette-lite/)
 
@@ -18,9 +18,9 @@ You can use this tool to open any SQLite database file that is hosted online and
 
 Copy the URL to the `.db` file and either paste it into the "Load database by URL" prompt, or construct a URL like the following:
 
-    https://simonw.github.io/datasette-lite/?url=https://latest.datasette.io/fixtures.db
+    https://lite.datasette.io/?url=https://latest.datasette.io/fixtures.db
 
 Some examples to try out:
 
-- [Global Power Plants](https://simonw.github.io/datasette-lite/?url=https://global-power-plants.datasettes.com/global-power-plants.db) - 33,000 power plants around the world
-- [United States members of congress](https://simonw.github.io/datasette-lite/?url=https://congress-legislators.datasettes.com/legislators.db) - the example database from the [Learn SQL with Datasette](https://datasette.io/tutorials/learn-sql) tutorial
+- [Global Power Plants](https://lite.datasette.io/datasette-lite/?url=https://global-power-plants.datasettes.com/global-power-plants.db) - 33,000 power plants around the world
+- [United States members of congress](https://lite.datasette.io/datasette-lite/?url=https://congress-legislators.datasettes.com/legislators.db) - the example database from the [Learn SQL with Datasette](https://datasette.io/tutorials/learn-sql) tutorial
