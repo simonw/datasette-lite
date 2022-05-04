@@ -44,17 +44,23 @@ async function startDatasette(initialUrl) {
         "about_url": "https://github.com/simonw/datasette-lite"
     })
     `);
+    datasetteLiteReady();
   } catch (error) {
     self.postMessage({error: error.message});
   }
 }
 
-let readyPromise = null;
+// Outside promise pattern
+// https://github.com/simonw/datasette-lite/issues/25#issuecomment-1116948381
+let datasetteLiteReady;
+let readyPromise = new Promise(function(resolve) {
+  datasetteLiteReady = resolve;
+});
 
 self.onmessage = async (event) => {
   console.log({event, data: event.data});
   if (event.data.type == 'startup') {
-    readyPromise = startDatasette(event.data.initialUrl);
+    await startDatasette(event.data.initialUrl);
     return;
   }
   // make sure loading is done

@@ -93,6 +93,7 @@ textarea#sql-editor {
 <script>
 const datasetteWorker = new Worker("webworker.js");
 const initialUrl = new URLSearchParams(location.search).get('url');
+
 datasetteWorker.postMessage({type: 'startup', initialUrl});
 
 let loadingLogs = ["Loading..."];
