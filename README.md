@@ -4,7 +4,10 @@ Datasette running in your browser using WebAssembly and [Pyodide](https://pyodid
 
 Live tool: https://lite.datasette.io/
 
-More about this project: [Datasette Lite: a server-side Python web application running in a browser](https://simonwillison.net/2022/May/4/datasette-lite/)
+More about this project:
+
+- [Datasette Lite: a server-side Python web application running in a browser](https://simonwillison.net/2022/May/4/datasette-lite/)
+- [Joining CSV files in your browser using Datasette Lite](https://simonwillison.net/2022/Jun/20/datasette-lite-csvs/)
 
 ## How this works
 
