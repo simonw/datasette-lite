@@ -1,4 +1,4 @@
-importScripts("https://cdn.jsdelivr.net/pyodide/dev/full/pyodide.js");
+importScripts("https://cdn.jsdelivr.net/pyodide/v0.20.0/full/pyodide.js");
 
 function log(line) {
   console.log({line})
@@ -16,7 +16,7 @@ async function startDatasette(initialUrl) {
   }
   console.log({toLoad});
   self.pyodide = await loadPyodide({
-    indexURL: "https://cdn.jsdelivr.net/pyodide/dev/full/"
+    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.20.0/full/"
   });
   await pyodide.loadPackage('micropip', log);
   await pyodide.loadPackage('ssl', log);
