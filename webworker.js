@@ -15,7 +15,7 @@ async function startDatasette(settings) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
-  if (settings.csvUrls) {
+  if (settings.csvUrls && settings.csvUrls.length) {
     csvs = settings.csvUrls;
     toLoad.push(["data.db", 0]);
   }
