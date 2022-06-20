@@ -9,14 +9,14 @@ async function startDatasette(settings) {
   let toLoad = [];
   let csvs = [];
   if (settings.initialUrl) {
-    let name = initialUrl.split('.db')[0].split('/').slice(-1)[0];
-    toLoad.push([name, initialUrl]);
-  } else if (!settings.csvUrl) {
+    let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
+    toLoad.push([name, settings.initialUrl]);
+  } else if (!settings.csvUrls) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
-  if (settings.csvUrl) {
-    csvs.push(settings.csvUrl);
+  if (settings.csvUrls) {
+    csvs = settings.csvUrls;
     toLoad.push(["data.db", 0]);
   }
   console.log({toLoad});
@@ -51,15 +51,27 @@ async function startDatasette(settings) {
         import sqlite_utils
         from sqlite_utils.utils import rows_from_file, TypeTracker
         db = sqlite_utils.Database("data.db")
+        table_names = set()
         for csv_url in csvs:
+            # Derive table name from CSV URL
+            bit = csv_url.split("/")[-1].split(".")[0].split("?")[0]
+            bit = bit.strip()
+            if not bit:
+                bit = "table"
+            prefix = 0
+            base_bit = bit
+            while bit in table_names:
+                prefix += 1
+                bit = "{}_{}".format(base_bit, prefix)
+            table_names.add(bit)
             tracker = TypeTracker()
             response = await pyfetch(csv_url)
             with open("csv.csv", "wb") as fp:
                 fp.write(await response.bytes())
-            db["csv"].insert_all(
+            db[bit].insert_all(
                 tracker.wrap(rows_from_file(open("csv.csv", "rb"))[0])
             )
-            db["csv"].transform(
+            db[bit].transform(
                 types=tracker.types
             )
     from datasette.app import Datasette
