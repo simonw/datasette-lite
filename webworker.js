@@ -11,7 +11,7 @@ async function startDatasette(settings) {
   if (settings.initialUrl) {
     let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
     toLoad.push([name, settings.initialUrl]);
-  } else if (!settings.csvUrls) {
+  } else if (!settings.csvUrls || !settings.csvUrls.length) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
