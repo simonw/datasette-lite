@@ -146,7 +146,7 @@ useAnalytics && plausible('pageview');
 
 window.onpopstate = function(event) {
   console.log(event);
-  datasetteWorker.postMessage({path: event.target.location.hash.split("#")[1]});
+  datasetteWorker.postMessage({path: event.target.location.hash.split("#")[1] || ""});
 }
 
 // Start with path from location.hash, if available
