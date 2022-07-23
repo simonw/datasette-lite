@@ -25,9 +25,12 @@ def static_server():
         except ConnectionRefusedError:
             time.sleep(1)
             retries -= 1
+
+    if not retries:
         raise RuntimeError("Failed to start http server")
-    process.terminate()
-    process.wait()
+    else:
+        process.terminate()
+        process.wait()
 
 
 @pytest.fixture(scope="module")
