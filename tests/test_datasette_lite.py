@@ -1,5 +1,5 @@
 from playwright.sync_api import Browser, Page, expect
-from subprocess import Popen
+from subprocess import Popen, PIPE
 import pathlib
 import pytest
 import time
@@ -10,7 +10,9 @@ root = pathlib.Path(__file__).parent.parent.absolute()
 
 @pytest.fixture(scope="module")
 def static_server():
-    process = Popen(["python", "-m", "http.server", "8123", "--directory", root])
+    process = Popen(
+        ["python", "-m", "http.server", "8123", "--directory", root], stdout=PIPE
+    )
     retries = 5
     while retries > 0:
         conn = HTTPConnection("localhost:8123")
@@ -21,7 +23,7 @@ def static_server():
                 yield process
                 break
         except ConnectionRefusedError:
-            time.sleep(0.5)
+            time.sleep(1)
             retries -= 1
         raise RuntimeError("Failed to start http server")
     process.terminate()
