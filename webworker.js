@@ -49,7 +49,7 @@ async function startDatasette(settings) {
     if csvs:
         await micropip.install("sqlite-utils==3.28")
         import sqlite_utils
-        from sqlite_utils.utils import rows_from_file, TypeTracker
+        from sqlite_utils.utils import rows_from_file, TypeTracker, Format
         db = sqlite_utils.Database("data.db")
         table_names = set()
         for csv_url in csvs:
@@ -69,7 +69,7 @@ async function startDatasette(settings) {
             with open("csv.csv", "wb") as fp:
                 fp.write(await response.bytes())
             db[bit].insert_all(
-                tracker.wrap(rows_from_file(open("csv.csv", "rb"))[0])
+                tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0])
             )
             db[bit].transform(
                 types=tracker.types
