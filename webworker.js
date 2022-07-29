@@ -47,7 +47,7 @@ async function startDatasette(settings) {
     await micropip.install("datasette==0.62a0")
     csvs = ${JSON.stringify(csvs)}
     if csvs:
-        await micropip.install("sqlite-utils==3.27")
+        await micropip.install("sqlite-utils==3.28")
         import sqlite_utils
         from sqlite_utils.utils import rows_from_file, TypeTracker
         db = sqlite_utils.Database("data.db")
