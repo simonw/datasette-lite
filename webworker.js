@@ -8,6 +8,7 @@ function log(line) {
 async function startDatasette(settings) {
   let toLoad = [];
   let csvs = [];
+  let sqls = [];
   if (settings.initialUrl) {
     let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
     toLoad.push([name, settings.initialUrl]);
@@ -15,11 +16,19 @@ async function startDatasette(settings) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
+  let needsDataDb = false;
   if (settings.csvUrls && settings.csvUrls.length) {
     csvs = settings.csvUrls;
+    needsDataDb = true;
+  }
+  if (settings.sqlUrls && settings.sqlUrls.length) {
+    sqls = settings.sqlUrls;
+    needsDataDb = true;
+  }
+  if (needsDataDb) {
     toLoad.push(["data.db", 0]);
   }
-  console.log({toLoad});
+
   self.pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.20.0/full/"
   });
@@ -45,6 +54,15 @@ async function startDatasette(settings) {
     # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
     await micropip.install("h11==0.12.0")
     await micropip.install("datasette==0.62a0")
+    # Execute any ?sql=URL SQL
+    sqls = ${JSON.stringify(sqls)}
+    if sqls:
+        for sql_url in sqls:
+            # Fetch that SQL and execute it
+            response = await pyfetch(sql_url)
+            sql = await response.string()
+            sqlite3.connect("data.db").executescript(sql)
+    # Import data from ?csv=URL CSV files
     csvs = ${JSON.stringify(csvs)}
     if csvs:
         await micropip.install("sqlite-utils==3.28")
