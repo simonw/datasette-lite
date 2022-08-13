@@ -12,9 +12,6 @@ async function startDatasette(settings) {
   if (settings.initialUrl) {
     let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
     toLoad.push([name, settings.initialUrl]);
-  } else if (!settings.csvUrls || !settings.csvUrls.length) {
-    toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
-    toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
   let needsDataDb = false;
   if (settings.csvUrls && settings.csvUrls.length) {
@@ -27,8 +24,10 @@ async function startDatasette(settings) {
   }
   if (needsDataDb) {
     toLoad.push(["data.db", 0]);
+  } else {
+    toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
+    toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
-
   self.pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.20.0/full/"
   });
