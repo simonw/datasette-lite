@@ -47,10 +47,10 @@ Some examples to try out:
 
 You can also initialize the `data.db` database by passing the URL to a SQL file. The easiest way to do this is to create a [GitHub Gist](https://gist.github.com/).
 
-This example SQL file creates a table and populates it with three records:
+This [example SQL file](https://gist.githubusercontent.com/simonw/ac4e19920b4b360752ac0f3ce85ba238/raw/90d31cf93bf1d97bb496de78559798f849b17e85/demo.sql) creates a table and populates it with three records. It's hosted in [this Gist](https://gist.github.com/simonw/ac4e19920b4b360752ac0f3ce85ba238).
 
     https://gist.githubusercontent.com/simonw/ac4e19920b4b360752ac0f3ce85ba238/raw/90d31cf93bf1d97bb496de78559798f849b17e85/demo.sql
 
-You can paste this into the "Load SQL by URL" prompt, or you can pass it as the `?sql=` parameter [like this](https://lite.datasette.io/?sql=https%3A%2F%2Fgist.githubusercontent.com%2Fsimonw%2Fac4e19920b4b360752ac0f3ce85ba238%2Fraw%2F90d31cf93bf1d97bb496de78559798f849b17e85%2Fdemo.sql).
+You can paste this URL into the "Load SQL by URL" prompt, or you can pass it as the `?sql=` parameter [like this](https://lite.datasette.io/?sql=https%3A%2F%2Fgist.githubusercontent.com%2Fsimonw%2Fac4e19920b4b360752ac0f3ce85ba238%2Fraw%2F90d31cf93bf1d97bb496de78559798f849b17e85%2Fdemo.sql).
 
 SQL will be executed before any CSV imports, so you can use initial SQL to create a table and then use `?csv=` to import data into it.
