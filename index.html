@@ -97,8 +97,9 @@ const urlParams = new URLSearchParams(location.search);
 const initialUrl = urlParams.get('url');
 const csvUrls = urlParams.getAll('csv');
 const sqlUrls = urlParams.getAll('sql');
+const installUrls = urlParams.getAll('install');
 
-datasetteWorker.postMessage({type: 'startup', initialUrl, csvUrls, sqlUrls});
+datasetteWorker.postMessage({type: 'startup', initialUrl, csvUrls, sqlUrls, installUrls});
 
 let loadingLogs = ["Loading..."];
 
