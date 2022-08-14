@@ -52,7 +52,7 @@ async function startDatasette(settings) {
     import micropip
     # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
     await micropip.install("h11==0.12.0")
-    await micropip.install("datasette==0.62a0")
+    await micropip.install("datasette")
     # Execute any ?sql=URL SQL
     sqls = ${JSON.stringify(sqls)}
     if sqls:
