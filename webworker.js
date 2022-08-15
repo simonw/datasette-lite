@@ -1,4 +1,4 @@
-importScripts("https://cdn.jsdelivr.net/pyodide/v0.21.0/full/pyodide.js");
+importScripts("/pyodide/pyodide.js");
 
 function log(line) {
   console.log({line})
@@ -25,11 +25,10 @@ async function startDatasette(settings) {
   if (needsDataDb) {
     toLoad.push(["data.db", 0]);
   } else {
-    toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
-    toLoad.push(["content.db", "https://datasette.io/content.db"]);
+    toLoad.push(["fixtures.db", "/fixtures.db"]);
   }
   self.pyodide = await loadPyodide({
-    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.21.0/full/"
+    indexURL: "/pyodide/"
   });
   await pyodide.loadPackage('micropip', log);
   await pyodide.loadPackage('ssl', log);
@@ -50,9 +49,35 @@ async function startDatasette(settings) {
         names.append(name)
 
     import micropip
-    # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
-    await micropip.install("h11==0.12.0")
-    await micropip.install("datasette")
+    await micropip.install("wheels/packaging-21.3-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/pyparsing-3.0.7-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/typing_extensions-4.1.1-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/six-1.16.0-py2.py3-none-any.whl", deps=False)
+    await micropip.install("wheels/MarkupSafe-2.1.1-cp310-cp310-emscripten_3_1_14_wasm32.whl", deps=False)
+    await micropip.install("wheels/PyYAML-6.0-cp310-cp310-emscripten_3_1_14_wasm32.whl", deps=False)
+    await micropip.install("wheels/pluggy-1.0.0-py2.py3-none-any.whl", deps=False)
+    await micropip.install("wheels/certifi-2022.6.15-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/python_multipart-0.0.4-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/itsdangerous-2.1.2-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/click-8.1.3-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/click_default_group_wheel-1.2.2-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/asgiref-3.5.2-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/h11-0.12.0-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/idna-3.3-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/sniffio-1.2.0-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/anyio-3.6.1-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/aiofiles-0.8.0-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/asgi_csrf-0.9-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/Pint-0.18-py2.py3-none-any.whl", deps=False)
+    await micropip.install("wheels/uvicorn-0.18.2-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/Jinja2-3.0.3-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/mergedeep-1.3.4-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/hupper-1.10.3-py2.py3-none-any.whl", deps=False)
+    await micropip.install("wheels/httpcore-0.15.0-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/janus-1.0.0-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/rfc3986-1.5.0-py2.py3-none-any.whl", deps=False)
+    await micropip.install("wheels/httpx-0.23.0-py3-none-any.whl", deps=False)
+    await micropip.install("wheels/datasette-0.62-py3-none-any.whl", deps=False)
     # Install any extra ?install= dependencies
     install_urls = ${JSON.stringify(settings.installUrls)}
     if install_urls:
