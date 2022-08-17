@@ -54,3 +54,25 @@ This [example SQL file](https://gist.githubusercontent.com/simonw/ac4e19920b4b36
 You can paste this URL into the "Load SQL by URL" prompt, or you can pass it as the `?sql=` parameter [like this](https://lite.datasette.io/?sql=https%3A%2F%2Fgist.githubusercontent.com%2Fsimonw%2Fac4e19920b4b360752ac0f3ce85ba238%2Fraw%2F90d31cf93bf1d97bb496de78559798f849b17e85%2Fdemo.sql).
 
 SQL will be executed before any CSV imports, so you can use initial SQL to create a table and then use `?csv=` to import data into it.
+
+## Installing plugins
+
+Datasette has a number of [plugins](https://datasette.io/plugins) that enable new features.
+
+You can install plugins into Datasette Lite by adding one or more `?install=name-of-plugin` parameters to the URL.
+
+Not all plugins are compatible with Datasette Lite at the moment, for example plugins that load their own JavaScript and CSS do not currently work, see [issue #8](https://github.com/simonw/datasette-lite/issues/8).
+
+Here's a list of plugins that have been tested with Datasette Lite, plus demo links to see them in action:
+
+- [datasette-packages](https://datasette.io/plugins/datasette-packages) - Show a list of currently installed Python packages - [demo](https://lite.datasette.io/?install=datasette-packages#/-/packages)
+- [datasette-dateutil](https://datasette.io/plugins/datasette-dateutil) - dateutil functions for Datasette - [demo](https://lite.datasette.io/?install=datasette-dateutil#/fixtures?sql=select%0A++dateutil_parse%28%2210+october+2020+3pm%22%29%2C%0A++dateutil_parse_fuzzy%28%22This+is+due+10+september%22%29%2C%0A++dateutil_parse%28%221%2F2%2F2020%22%29%2C%0A-++dateutil_parse%28%222020-03-04%22%29%2C%0A++dateutil_parse_dayfirst%28%222020-03-04%22%29%3B)
+- [datasette-schema-versions](https://datasette.io/plugins/datasette-schema-versions) - Datasette plugin that shows the schema version of every attached database - [demo](https://lite.datasette.io/?install=datasette-schema-versions#/-/schema-versions)
+- [datasette-debug-asgi](https://datasette.io/plugins/datasette-debug-asgi) - Datasette plugin for dumping out the ASGI scope. - [demo](https://lite.datasette.io/?install=datasette-debug-asgi#/-/asgi-scope)
+- [datasette-query-links](https://datasette.io/plugins/datasette-query-links) - Turn SELECT queries returned by a query into links to execute them - [demo](https://lite.datasette.io/?install=datasette-query-links#/fixtures?sql=select%0D%0A++'select+*+from+[facetable]'+as+query%0D%0Aunion%0D%0Aselect%0D%0A++'select+sqlite_version()'%0D%0Aunion%0D%0Aselect%0D%0A++'select+this+is+invalid+SQL+so+will+not+be+linked')
+- [datasette-json-html](https://datasette.io/plugins/datasette-json-html) - Datasette plugin for rendering HTML based on JSON values - [demo](https://lite.datasette.io/?install=datasette-json-html#/fixtures?sql=select+%27%5B%0A++++%7B%0A++++++++%22href%22%3A+%22https%3A%2F%2Fsimonwillison.net%2F%22%2C%0A++++++++%22label%22%3A+%22Simon+Willison%22%0A++++%7D%2C%0A++++%7B%0A++++++++%22href%22%3A+%22https%3A%2F%2Fgithub.com%2Fsimonw%2Fdatasette%22%2C%0A++++++++%22label%22%3A+%22Datasette%22%0A++++%7D%0A%5D%27+as+output)
+- [datasette-haversine](https://datasette.io/plugins/datasette-haversine) - Datasette plugin that adds a custom SQL function for haversine distances - [demo](https://lite.datasette.io/?install=datasette-haversine#/fixtures?sql=select+haversine%280%2C+154%2C+1%2C+131%29)
+- [datasette-jellyfish](https://datasette.io/plugins/datasette-jellyfish) - Datasette plugin that adds custom SQL functions for fuzzy string matching, built on top of the Jellyfish Python library - [demo](https://lite.datasette.io/?install=datasette-jellyfish#/fixtures?sql=SELECT%0A++++levenshtein_distance%28%3As1%2C+%3As2%29%2C%0A++++damerau_levenshtein_distance%28%3As1%2C+%3As2%29%2C%0A++++hamming_distance%28%3As1%2C+%3As2%29%2C%0A++++jaro_similarity%28%3As1%2C+%3As2%29%2C%0A++++jaro_winkler_similarity%28%3As1%2C+%3As2%29%2C%0A++++match_rating_comparison%28%3As1%2C+%3As2%29%3B&s1=barrack+obama&s2=barrack+h+obama)
+- [datasette-pretty-json](https://datasette.io/plugins/datasette-pretty-json) - Datasette plugin that pretty-prints any column values that are valid JSON objects or arrays. - [demo](https://lite.datasette.io/?install=datasette-pretty-json#/fixtures?sql=select+%27%7B%22this%22%3A+%5B%22is%22%2C+%22nested%22%2C+%22json%22%5D%7D%27)
+- [datasette-yaml](https://datasette.io/plugins/datasette-yaml) - Export Datasette records as YAML - [demo](https://lite.datasette.io/?install=datasette-yaml#/fixtures/compound_three_primary_keys.yaml)
+- [datasette-copyable](https://datasette.io/plugins/datasette-copyable) - Datasette plugin for outputting tables in formats suitable for copy and paste - [demo](https://lite.datasette.io/?install=datasette-copyable#/fixtures/compound_three_primary_keys.copyable?_table_format=github)
