@@ -9,22 +9,27 @@ async function startDatasette(settings) {
   let toLoad = [];
   let csvs = [];
   let sqls = [];
+  let needsDataDb = false;
+  let shouldLoadDefaults = true;
   if (settings.initialUrl) {
     let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
     toLoad.push([name, settings.initialUrl]);
+    shouldLoadDefaults = false;
   }
-  let needsDataDb = false;
   if (settings.csvUrls && settings.csvUrls.length) {
     csvs = settings.csvUrls;
     needsDataDb = true;
+    shouldLoadDefaults = false;
   }
   if (settings.sqlUrls && settings.sqlUrls.length) {
     sqls = settings.sqlUrls;
     needsDataDb = true;
+    shouldLoadDefaults = false;
   }
   if (needsDataDb) {
     toLoad.push(["data.db", 0]);
-  } else {
+  }
+  if (shouldLoadDefaults) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
