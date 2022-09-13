@@ -93,10 +93,20 @@ textarea#sql-editor {
 
 <script>
 const datasetteWorker = new Worker("webworker.js");
+const githubUrl = /^https:\/\/github.com\/(.*)\/(.*)\/blob\/(.*)(\?raw=true)?$/;
+
+function fixUrl(url) {
+  const matches = githubUrl.exec(url);
+  if (matches) {
+    return `https://raw.githubusercontent.com/${matches[1]}/${matches[2]}/${matches[3]}`;
+  }
+  return url;
+}
+
 const urlParams = new URLSearchParams(location.search);
-const initialUrl = urlParams.get('url');
-const csvUrls = urlParams.getAll('csv');
-const sqlUrls = urlParams.getAll('sql');
+const initialUrl = fixUrl(urlParams.get('url'));
+const csvUrls = urlParams.getAll('csv').map(fixUrl);
+const sqlUrls = urlParams.getAll('sql').map(fixUrl);
 const installUrls = urlParams.getAll('install');
 
 datasetteWorker.postMessage({type: 'startup', initialUrl, csvUrls, sqlUrls, installUrls});
@@ -249,7 +259,7 @@ async function checkUrl(url, contentType) {
 
 document.querySelector('#load-custom button.db-url').addEventListener('click', async function(ev) {
   ev.preventDefault();
-  let url = prompt("Enter a full URL to a SQLite .db file");
+  let url = fixUrl(prompt("Enter a full URL to a SQLite .db file"));
   if (!url) {
     return;
   }
@@ -262,7 +272,7 @@ document.querySelector('#load-custom button.db-url').addEventListener('click', a
 });
 document.querySelector('#load-custom button.csv-url').addEventListener('click', async function(ev) {
   ev.preventDefault();
-  let url = prompt("Enter a full URL to a CSV file");
+  let url = fixUrl(prompt("Enter a full URL to a CSV file"));
   if (!url) {
     return;
   }
@@ -275,7 +285,7 @@ document.querySelector('#load-custom button.csv-url').addEventListener('click', 
 });
 document.querySelector('#load-custom button.sql-url').addEventListener('click', async function(ev) {
   ev.preventDefault();
-  let url = prompt("Enter a full URL to a SQL file");
+  let url = fixUrl(prompt("Enter a full URL to a SQL file"));
   if (!url) {
     return;
   }
