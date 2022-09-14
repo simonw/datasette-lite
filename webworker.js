@@ -108,6 +108,7 @@ async function startDatasette(settings) {
         "about": "Datasette Lite",
         "about_url": "https://github.com/simonw/datasette-lite"
     })
+    await ds.invoke_startup()
     `);
     datasetteLiteReady();
   } catch (error) {
