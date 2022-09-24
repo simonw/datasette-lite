@@ -41,7 +41,7 @@ function createLazyFileSqlite(parent, name, url, canRead, canWrite, FS) {
 // #if SMALL_XHR_CHUNKS
     // var chunkSize = 1024; // Chunk size in bytes
 // Match default SQLite Page size
-    var chunkSize = 4096; // Chunk size in bytes
+    var chunkSize = 4096 * 5; // Chunk size in bytes
 // #else
 //     var chunkSize = 1024*1024; // Chunk size in bytes
 // #endif
