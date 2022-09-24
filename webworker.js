@@ -7,13 +7,14 @@ function log(line) {
 
 async function startDatasette(settings) {
   let toLoad = [];
+  let toMount = [];
   let csvs = [];
   let sqls = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
   if (settings.initialUrl) {
     let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
-    toLoad.push([name, settings.initialUrl]);
+    toMount.push([name, settings.initialUrl]);
     shouldLoadDefaults = false;
   }
   if (settings.csvUrls && settings.csvUrls.length) {
@@ -30,12 +31,17 @@ async function startDatasette(settings) {
     toLoad.push(["data.db", 0]);
   }
   if (shouldLoadDefaults) {
-    toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
-    toLoad.push(["content.db", "https://datasette.io/content.db"]);
+    toMount.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
+    toMount.push(["content.db", "https://datasette.io/content.db"]);
   }
   self.pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.20.0/full/"
   });
+
+  for (let [name, url] of toMount) {
+    pyodide.FS.createLazyFile('/home/pyodide', name, url, true, false)
+  }
+
   await pyodide.loadPackage('micropip', log);
   await pyodide.loadPackage('ssl', log);
   await pyodide.loadPackage('setuptools', log); // For pkg_resources
@@ -53,6 +59,9 @@ async function startDatasette(settings) {
         else:
             sqlite3.connect(name).execute("vacuum")
         names.append(name)
+    for name, url in ${JSON.stringify(toMount)}:
+      sqlite3.connect(f"file:{name}?mode=ro", uri=True)
+      names.append(name)
 
     import micropip
     # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
