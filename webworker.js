@@ -113,6 +113,7 @@ async function startDatasette(settings) {
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
+        "sql_time_limit_ms": 100000,
     }, metadata = {
         "about": "Datasette Lite",
         "about_url": "https://github.com/simonw/datasette-lite"
