@@ -169,7 +169,7 @@ class LazyUint8Array {
       return this._chunkSize;
   }
   doXHR(absoluteFrom, absoluteTo) {
-      console.log(`[xhr of size ${(absoluteTo + 1 - absoluteFrom) / 1024} KiB @ ${absoluteFrom / 1024} KiB]`);
+      log(`[xhr of size ${(absoluteTo + 1 - absoluteFrom) / 1024} KiB @ ${absoluteFrom / 1024} KiB]`);
       this.requestLimiter(absoluteTo - absoluteFrom);
       this.totalFetchedBytes += absoluteTo - absoluteFrom;
       this.totalRequests++;
