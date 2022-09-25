@@ -5,174 +5,238 @@ function log(line) {
   self.postMessage({type: 'log', line: line});
 }
 
-// Extracted from https://github.com/emscripten-core/emscripten/blob/0c070488619cf556e4917cd88c0a868faf611c13/src/library_fs.js#L1675
-// * Tuned chunk size to match SQLite default chunk size
-// * Commented out emscripten build concerns
-// * Allow emscripten FS to be injected in
-function createLazyFileSqlite(parent, name, url, canRead, canWrite, FS) {
-  // Lazy chunked Uint8Array (implements get and length from Uint8Array). Actual getting is abstracted away for eventual reuse.
-  /** @constructor */
-  function LazyUint8Array() {
-    this.lengthKnown = false;
-    this.chunks = []; // Loaded chunks. Index is the chunk number
+// Extracted and adapted from https://github.com/phiresky/sql.js-httpvfs/blob/master/src/lazyFile.ts
+// adapted from https://github.com/emscripten-core/emscripten/blob/cbc974264e0b0b3f0ce8020fb2f1861376c66545/src/library_fs.js
+// flexible chunk size parameter
+// Creates a file record for lazy-loading from a URL. XXX This requires a synchronous
+// XHR, which is not possible in browsers except in a web worker!
+class LazyUint8Array {
+  constructor(config) {
+      var _a, _b;
+      this.serverChecked = false;
+      this.chunks = []; // Loaded chunks. Index is the chunk number
+      this.totalFetchedBytes = 0;
+      this.totalRequests = 0;
+      this.readPages = [];
+      // LRU list of read heds, max length = maxReadHeads. first is most recently used
+      this.readHeads = [];
+      this.lastGet = -1;
+      this._chunkSize = config.requestChunkSize;
+      this.maxSpeed = Math.round((config.maxReadSpeed || 5 * 1024 * 1024) / this._chunkSize); // max 5MiB at once
+      this.maxReadHeads = (_a = config.maxReadHeads) !== null && _a !== void 0 ? _a : 3;
+      this.rangeMapper = config.rangeMapper;
+      this.logPageReads = (_b = config.logPageReads) !== null && _b !== void 0 ? _b : false;
+      if (config.fileLength) {
+          this._length = config.fileLength;
+      }
+      this.requestLimiter = config.requestLimiter == null ? ((ignored) => { }) : config.requestLimiter;
   }
-  LazyUint8Array.prototype.get = /** @this{Object} */ function LazyUint8Array_get(idx) {
-    if (idx > this.length-1 || idx < 0) {
-      return undefined;
-    }
-    var chunkOffset = idx % this.chunkSize;
-    var chunkNum = (idx / this.chunkSize)|0;
-    return this.getter(chunkNum)[chunkOffset];
-  };
-  LazyUint8Array.prototype.setDataGetter = function LazyUint8Array_setDataGetter(getter) {
-    this.getter = getter;
-  };
-  LazyUint8Array.prototype.cacheLength = function LazyUint8Array_cacheLength() {
-    // Find length
-    var xhr = new XMLHttpRequest();
-    xhr.open('HEAD', url, false);
-    xhr.send(null);
-    if (!(xhr.status >= 200 && xhr.status < 300 || xhr.status === 304)) throw new Error("Couldn't load " + url + ". Status: " + xhr.status);
-    var datalength = Number(xhr.getResponseHeader("Content-length"));
-    var header;
-    var hasByteServing = (header = xhr.getResponseHeader("Accept-Ranges")) && header === "bytes";
-    var usesGzip = (header = xhr.getResponseHeader("Content-Encoding")) && header === "gzip";
-
-// #if SMALL_XHR_CHUNKS
-    // var chunkSize = 1024; // Chunk size in bytes
-// Match default SQLite Page size
-    var chunkSize = 4096 * 10; // Chunk size in bytes
-// #else
-//     var chunkSize = 1024*1024; // Chunk size in bytes
-// #endif
-
-    if (!hasByteServing) chunkSize = datalength;
-
-    // Function to get a range from the remote URL.
-    var doXHR = (function(from, to) {
-      if (from > to) throw new Error("invalid range (" + from + ", " + to + ") or no bytes requested!");
-      if (to > datalength-1) throw new Error("only " + datalength + " bytes available! programmer error!");
-
+  /**
+   * efficiently copy the range [start, start + length) from the http file into the
+   * output buffer at position [outOffset, outOffest + length)
+   * reads from cache or synchronously fetches via HTTP if needed
+   */
+  copyInto(buffer, outOffset, length, start) {
+      if (start >= this.length)
+          return 0;
+      length = Math.min(this.length - start, length);
+      const end = start + length;
+      let i = 0;
+      while (i < length) {
+          // {idx: 24, chunkOffset: 24, chunkNum: 0, wantedSize: 16}
+          const idx = start + i;
+          const chunkOffset = idx % this.chunkSize;
+          const chunkNum = (idx / this.chunkSize) | 0;
+          const wantedSize = Math.min(this.chunkSize, end - idx);
+          let inChunk = this.getChunk(chunkNum);
+          if (chunkOffset !== 0 || wantedSize !== this.chunkSize) {
+              inChunk = inChunk.subarray(chunkOffset, chunkOffset + wantedSize);
+          }
+          buffer.set(inChunk, outOffset + i);
+          i += inChunk.length;
+      }
+      return length;
+  }
+  /* find the best matching existing read head to get the given chunk or create a new one */
+  moveReadHead(wantedChunkNum) {
+      for (const [i, head] of this.readHeads.entries()) {
+          const fetchStartChunkNum = head.startChunk + head.speed;
+          const newSpeed = Math.min(this.maxSpeed, head.speed * 2);
+          const wantedIsInNextFetchOfHead = wantedChunkNum >= fetchStartChunkNum &&
+              wantedChunkNum < fetchStartChunkNum + newSpeed;
+          if (wantedIsInNextFetchOfHead) {
+              head.speed = newSpeed;
+              head.startChunk = fetchStartChunkNum;
+              if (i !== 0) {
+                  // move head to front
+                  this.readHeads.splice(i, 1);
+                  this.readHeads.unshift(head);
+              }
+              return head;
+          }
+      }
+      const newHead = {
+          startChunk: wantedChunkNum,
+          speed: 1,
+      };
+      this.readHeads.unshift(newHead);
+      while (this.readHeads.length > this.maxReadHeads)
+          this.readHeads.pop();
+      return newHead;
+  }
+  /** get the given chunk from cache or fetch it from remote */
+  getChunk(wantedChunkNum) {
+      let wasCached = true;
+      if (typeof this.chunks[wantedChunkNum] === "undefined") {
+          wasCached = false;
+          // double the fetching chunk size if the wanted chunk would be within the next fetch request
+          const head = this.moveReadHead(wantedChunkNum);
+          const chunksToFetch = head.speed;
+          const startByte = head.startChunk * this.chunkSize;
+          let endByte = (head.startChunk + chunksToFetch) * this.chunkSize - 1; // including this byte
+          endByte = Math.min(endByte, this.length - 1); // if datalength-1 is selected, this is the last block
+          const buf = this.doXHR(startByte, endByte);
+          for (let i = 0; i < chunksToFetch; i++) {
+              const curChunk = head.startChunk + i;
+              if (i * this.chunkSize >= buf.byteLength)
+                  break; // past end of file
+              const curSize = (i + 1) * this.chunkSize > buf.byteLength
+                  ? buf.byteLength - i * this.chunkSize
+                  : this.chunkSize;
+              // console.log("constructing chunk", buf.byteLength, i * this.chunkSize, curSize);
+              this.chunks[curChunk] = new Uint8Array(buf, i * this.chunkSize, curSize);
+          }
+      }
+      if (typeof this.chunks[wantedChunkNum] === "undefined")
+          throw new Error("doXHR failed (bug)!");
+      const boring = !this.logPageReads || this.lastGet == wantedChunkNum;
+      if (!boring) {
+          this.lastGet = wantedChunkNum;
+          this.readPages.push({
+              pageno: wantedChunkNum,
+              wasCached,
+              prefetch: wasCached ? 0 : this.readHeads[0].speed - 1,
+          });
+      }
+      return this.chunks[wantedChunkNum];
+  }
+  /** verify the server supports range requests and find out file length */
+  checkServer() {
+      var xhr = new XMLHttpRequest();
+      const url = this.rangeMapper(0, 0).url;
+      // can't set Accept-Encoding header :( https://stackoverflow.com/questions/41701849/cannot-modify-accept-encoding-with-fetch
+      xhr.open("HEAD", url, false);
+      // // maybe this will help it not use compression?
+      // xhr.setRequestHeader("Range", "bytes=" + 0 + "-" + 1e12);
+      xhr.send(null);
+      if (!((xhr.status >= 200 && xhr.status < 300) || xhr.status === 304))
+          throw new Error("Couldn't load " + url + ". Status: " + xhr.status);
+      var datalength = Number(xhr.getResponseHeader("Content-length"));
+      var hasByteServing = xhr.getResponseHeader("Accept-Ranges") === "bytes";
+      const encoding = xhr.getResponseHeader("Content-Encoding");
+      var usesCompression = encoding && encoding !== "identity";
+      if (!hasByteServing) {
+          const msg = "Warning: The server did not respond with Accept-Ranges=bytes. It either does not support byte serving or does not advertise it (`Accept-Ranges: bytes` header missing), or your database is hosted on CORS and the server doesn't mark the accept-ranges header as exposed. This may lead to incorrect results.";
+          console.warn(msg, "(seen response headers:", xhr.getAllResponseHeaders(), ")");
+          // throw Error(msg);
+      }
+      if (usesCompression) {
+          console.warn(`Warning: The server responded with ${encoding} encoding to a HEAD request. Ignoring since it may not do so for Range HTTP requests, but this will lead to incorrect results otherwise since the ranges will be based on the compressed data instead of the uncompressed data.`);
+      }
+      if (usesCompression) {
+          // can't use the given data length if there's compression
+          datalength = null;
+      }
+      if (!this._length) {
+          if (!datalength) {
+              console.error("response headers", xhr.getAllResponseHeaders());
+              throw Error("Length of the file not known. It must either be supplied in the config or given by the HTTP server.");
+          }
+          this._length = datalength;
+      }
+      this.serverChecked = true;
+  }
+  get length() {
+      if (!this.serverChecked) {
+          this.checkServer();
+      }
+      return this._length;
+  }
+  get chunkSize() {
+      if (!this.serverChecked) {
+          this.checkServer();
+      }
+      return this._chunkSize;
+  }
+  doXHR(absoluteFrom, absoluteTo) {
+      console.log(`[xhr of size ${(absoluteTo + 1 - absoluteFrom) / 1024} KiB @ ${absoluteFrom / 1024} KiB]`);
+      this.requestLimiter(absoluteTo - absoluteFrom);
+      this.totalFetchedBytes += absoluteTo - absoluteFrom;
+      this.totalRequests++;
+      if (absoluteFrom > absoluteTo)
+          throw new Error("invalid range (" +
+              absoluteFrom +
+              ", " +
+              absoluteTo +
+              ") or no bytes requested!");
+      if (absoluteTo > this.length - 1)
+          throw new Error("only " + this.length + " bytes available! programmer error!");
+      const { fromByte: from, toByte: to, url, } = this.rangeMapper(absoluteFrom, absoluteTo);
       // TODO: Use mozResponseArrayBuffer, responseStream, etc. if available.
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', url, false);
-      if (datalength !== chunkSize) xhr.setRequestHeader("Range", "bytes=" + from + "-" + to);
-
+      xhr.open("GET", url, false);
+      if (this.length !== this.chunkSize)
+          xhr.setRequestHeader("Range", "bytes=" + from + "-" + to);
       // Some hints to the browser that we want binary data.
-      if (typeof Uint8Array != 'undefined') xhr.responseType = 'arraybuffer';
+      xhr.responseType = "arraybuffer";
       if (xhr.overrideMimeType) {
-        xhr.overrideMimeType('text/plain; charset=x-user-defined');
+          xhr.overrideMimeType("text/plain; charset=x-user-defined");
       }
-
       xhr.send(null);
-      if (!(xhr.status >= 200 && xhr.status < 300 || xhr.status === 304)) throw new Error("Couldn't load " + url + ". Status: " + xhr.status);
+      if (!((xhr.status >= 200 && xhr.status < 300) || xhr.status === 304))
+          throw new Error("Couldn't load " + url + ". Status: " + xhr.status);
       if (xhr.response !== undefined) {
-        return new Uint8Array(/** @type{Array<number>} */(xhr.response || []));
-      } else {
-        return intArrayFromString(xhr.responseText || '', true);
+          return xhr.response;
       }
-    });
-    var lazyArray = this;
-    lazyArray.setDataGetter(function(chunkNum) {
-      var start = chunkNum * chunkSize;
-      var end = (chunkNum+1) * chunkSize - 1; // including this byte
-      end = Math.min(end, datalength-1); // if datalength-1 is selected, this is the last block
-      if (typeof(lazyArray.chunks[chunkNum]) === "undefined") {
-        lazyArray.chunks[chunkNum] = doXHR(start, end);
+      else {
+          throw Error("xhr did not return uint8array");
       }
-      if (typeof(lazyArray.chunks[chunkNum]) === "undefined") throw new Error("doXHR failed!");
-      return lazyArray.chunks[chunkNum];
-    });
-
-    if (usesGzip || !datalength) {
-      // if the server uses gzip or doesn't supply the length, we have to download the whole file to get the (uncompressed) length
-      chunkSize = datalength = 1; // this will force getter(0)/doXHR do download the whole file
-      datalength = this.getter(0).length;
-      chunkSize = datalength;
-      out("LazyFiles on gzip forces download of the whole file when length is accessed");
-    }
-
-    this._length = datalength;
-    this._chunkSize = chunkSize;
-    this.lengthKnown = true;
-  };
-  if (typeof XMLHttpRequest !== 'undefined') {
-    // if (!ENVIRONMENT_IS_WORKER) throw 'Cannot do synchronous binary XHRs outside webworkers in modern browsers. Use --embed-file or --preload-file in emcc';
-    var lazyArray = new LazyUint8Array();
-    Object.defineProperties(lazyArray, {
-      length: {
-        get: /** @this{Object} */ function() {
-          if (!this.lengthKnown) {
-            this.cacheLength();
-          }
-          return this._length;
-        }
-      },
-      chunkSize: {
-        get: /** @this{Object} */ function() {
-          if (!this.lengthKnown) {
-            this.cacheLength();
-          }
-          return this._chunkSize;
-        }
-      }
-    });
-
-    var properties = { isDevice: false, contents: lazyArray };
-  } else {
-    var properties = { isDevice: false, url: url };
   }
-
+}
+/** create the actual file object for the emscripten file system */
+function createLazyFile(FS, parent, name, canRead, canWrite, lazyFileConfig) {
+  var lazyArray = new LazyUint8Array(lazyFileConfig);
+  var properties = { isDevice: false, contents: lazyArray };
   var node = FS.createFile(parent, name, properties, canRead, canWrite);
-  // This is a total hack, but I want to get this lazy file code out of the
-  // core of MEMFS. If we want to keep this lazy file concept I feel it should
-  // be its own thin LAZYFS proxying calls to MEMFS.
-  if (properties.contents) {
-    node.contents = properties.contents;
-  } else if (properties.url) {
-    node.contents = null;
-    node.url = properties.url;
-  }
+  node.contents = lazyArray;
   // Add a function that defers querying the file size until it is asked the first time.
   Object.defineProperties(node, {
-    usedBytes: {
-      get: /** @this {FSNode} */ function() { return this.contents.length; }
-    }
+      usedBytes: {
+          get: /** @this {FSNode} */ function () {
+              return this.contents.length;
+          },
+      },
   });
   // override each stream op with one that tries to force load the lazy file first
   var stream_ops = {};
   var keys = Object.keys(node.stream_ops);
-  keys.forEach(function(key) {
-    var fn = node.stream_ops[key];
-    stream_ops[key] = function forceLoadLazyFile() {
-      FS.forceLoadFile(node);
-      return fn.apply(null, arguments);
-    };
+  keys.forEach(function (key) {
+      var fn = node.stream_ops[key];
+      stream_ops[key] = function forceLoadLazyFile() {
+          FS.forceLoadFile(node);
+          return fn.apply(null, arguments);
+      };
   });
   // use a custom read function
   stream_ops.read = function stream_ops_read(stream, buffer, offset, length, position) {
-    FS.forceLoadFile(node);
-    var contents = stream.node.contents;
-    if (position >= contents.length)
-      return 0;
-    var size = Math.min(contents.length - position, length);
-// #if ASSERTIONS
-//     assert(size >= 0);
-// #endif
-    if (contents.slice) { // normal array
-      for (var i = 0; i < size; i++) {
-        buffer[offset + i] = contents[position + i];
-      }
-    } else {
-      for (var i = 0; i < size; i++) { // LazyUint8Array from sync binary XHR
-        buffer[offset + i] = contents.get(position + i);
-      }
-    }
-    return size;
+      FS.forceLoadFile(node);
+      const contents = stream.node.contents;
+      return contents.copyInto(buffer, offset, length, position);
   };
   node.stream_ops = stream_ops;
   return node;
 }
+
 
 async function startDatasette(settings) {
   let toLoad = [];
@@ -208,7 +272,22 @@ async function startDatasette(settings) {
   });
 
   for (let [name, url] of toMount) {
-    createLazyFileSqlite('/home/pyodide', name, url, true, false, pyodide.FS)
+    createLazyFile(
+      pyodide.FS,
+      '/home/pyodide',
+      name,
+      true,
+      false,
+      {
+        rangeMapper: (absoluteFrom, absoluteTo) => {
+          return {
+            fromByte: absoluteFrom,
+            toByte: absoluteTo,
+            url: url
+          }
+      },
+      requestChunkSize: 4096,
+    })
   }
 
   await pyodide.loadPackage('micropip', log);
