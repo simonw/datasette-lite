@@ -286,7 +286,7 @@ async function startDatasette(settings) {
             url: url
           }
       },
-      requestChunkSize: 4096,
+      requestChunkSize: 12288,
     })
   }
 
