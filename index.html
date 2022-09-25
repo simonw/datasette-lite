@@ -234,9 +234,10 @@ output.addEventListener('submit', (ev => {
   console.log(ev);
   ev.stopPropagation();
   ev.preventDefault();
-  
+
   // Show loading indicator
   document.getElementById('loading-indicator').style.display = 'block';
+  loadingLogs = [];
   window.scrollTo(0, 0);
 
   if (ev.target && ev.target.nodeName == "FORM" && ev.target.method.toLowerCase() == "get") {
