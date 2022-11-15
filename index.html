@@ -107,9 +107,10 @@ const urlParams = new URLSearchParams(location.search);
 const initialUrl = fixUrl(urlParams.get('url'));
 const csvUrls = urlParams.getAll('csv').map(fixUrl);
 const sqlUrls = urlParams.getAll('sql').map(fixUrl);
+const jsonUrls = urlParams.getAll('json').map(fixUrl);
 const installUrls = urlParams.getAll('install');
 
-datasetteWorker.postMessage({type: 'startup', initialUrl, csvUrls, sqlUrls, installUrls});
+datasetteWorker.postMessage({type: 'startup', initialUrl, csvUrls, sqlUrls, jsonUrls, installUrls});
 
 let loadingLogs = ["Loading..."];
 
@@ -155,8 +156,9 @@ datasetteWorker.onmessage = (event) => {
 <form id="load-custom">
   <p style="padding: 1em">
     <button type="button" class="db-url">Load SQLite DB by URL</button>
-    <button type="button" class="csv-url">Load CSV by URL</button>
-    <button type="button" class="sql-url">Load SQL by URL</button>
+    <button type="button" class="csv-url">Load CSV</button>
+    <button type="button" class="json-url">Load JSON</button>
+    <button type="button" class="sql-url">Load SQL</button>
     <a style="text-decoration: none; padding-left: 0.3em; color: #067EFF" href="https://github.com/simonw/datasette-lite">Documentation</a>
   </p>
 </form>
@@ -281,6 +283,19 @@ document.querySelector('#load-custom button.csv-url').addEventListener('click', 
     location.href = location.pathname + '?csv=' + encodeURIComponent(url);
   } else {
     alert("That CSV could not be loaded");
+  }
+});
+document.querySelector('#load-custom button.json-url').addEventListener('click', async function(ev) {
+  ev.preventDefault();
+  let url = fixUrl(prompt("Enter a full URL to a JSON file"));
+  if (!url) {
+    return;
+  }
+  let valid = await checkUrl(url);
+  if (valid) {
+    location.href = location.pathname + '?json=' + encodeURIComponent(url);
+  } else {
+    alert("That JSON could not be loaded");
   }
 });
 document.querySelector('#load-custom button.sql-url').addEventListener('click', async function(ev) {

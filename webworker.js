@@ -9,6 +9,7 @@ async function startDatasette(settings) {
   let toLoad = [];
   let csvs = [];
   let sqls = [];
+  let jsons = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
   if (settings.initialUrl) {
@@ -23,6 +24,11 @@ async function startDatasette(settings) {
   }
   if (settings.sqlUrls && settings.sqlUrls.length) {
     sqls = settings.sqlUrls;
+    needsDataDb = true;
+    shouldLoadDefaults = false;
+  }
+  if (settings.jsonUrls && settings.jsonUrls.length) {
+    jsons = settings.jsonUrls;
     needsDataDb = true;
     shouldLoadDefaults = false;
   }
@@ -71,11 +77,12 @@ async function startDatasette(settings) {
             response = await pyfetch(sql_url)
             sql = await response.string()
             sqlite3.connect("data.db").executescript(sql)
-    # Import data from ?csv=URL CSV files
+    # Import data from ?csv=URL CSV files/?json=URL JSON files
     csvs = ${JSON.stringify(csvs)}
-    if csvs:
+    jsons = ${JSON.stringify(jsons)}
+    if csvs or jsons:
         await micropip.install("sqlite-utils==3.28")
-        import sqlite_utils
+        import sqlite_utils, json
         from sqlite_utils.utils import rows_from_file, TypeTracker, Format
         db = sqlite_utils.Database("data.db")
         table_names = set()
@@ -101,6 +108,24 @@ async function startDatasette(settings) {
             db[bit].transform(
                 types=tracker.types
             )
+        for json_url in jsons:
+            bit = json_url.split("/")[-1].split(".")[0].split("?")[0]
+            bit = bit.strip()
+            if not bit:
+                bit = "table"
+            prefix = 0
+            base_bit = bit
+            while bit in table_names:
+                prefix += 1
+                bit = "{}_{}".format(base_bit, prefix)
+            table_names.add(bit)
+            response = await pyfetch(json_url)
+            with open("json.json", "wb") as fp:
+                fp.write(await response.bytes())
+            db[bit].insert_all(
+                json.load(open("json.json"))
+            )
+
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
