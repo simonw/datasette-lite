@@ -75,6 +75,19 @@ You can paste this URL into the "Load SQL by URL" prompt, or you can pass it as 
 
 SQL will be executed before any CSV imports, so you can use initial SQL to create a table and then use `?csv=` to import data into it.
 
+## Special handling of GitHub URLs
+
+A tricky thing about using Datasette Lite is that the files you load via URL need to be hosted somewhere that serves open CORS headers.
+
+Both regular GitHub and [GitHub Gists](https://gist.github.com/) do this by default. This makes them excellent options to host data files that you want to load into Datasette Lite.
+
+You can paste in the "raw" URL to a file, but Datasette Lite also has a shortcut: if you paste in the URL to a page on GitHub or a Gist it will automatically convert it to the "raw" URL for you.
+
+Try the following to see this in action:
+
+- https://lite.datasette.io/?json=https://gist.github.com/simonw/7eacc70cd8b2868be0a18796cec078b9 ([this Gist](https://gist.github.com/simonw/7eacc70cd8b2868be0a18796cec078b9))
+- https://lite.datasette.io/?csv=https://github.com/nytimes/covid-19-data/blob/master/us-counties-recent.csv ([this file](https://github.com/nytimes/covid-19-data/blob/master/us-counties-recent.csv))
+
 ## Installing plugins
 
 Datasette has a number of [plugins](https://datasette.io/plugins) that enable new features.

@@ -94,11 +94,16 @@ textarea#sql-editor {
 <script>
 const datasetteWorker = new Worker("webworker.js");
 const githubUrl = /^https:\/\/github.com\/(.*)\/(.*)\/blob\/(.*)(\?raw=true)?$/;
+const gistUrl = /^https:\/\/gist.github.com\/(.*)\/(.*)$/;
 
 function fixUrl(url) {
-  const matches = githubUrl.exec(url);
-  if (matches) {
-    return `https://raw.githubusercontent.com/${matches[1]}/${matches[2]}/${matches[3]}`;
+  const githubMatch = githubUrl.exec(url);
+  if (githubMatch) {
+    return `https://raw.githubusercontent.com/${githubMatch[1]}/${githubMatch[2]}/${githubMatch[3]}`;
+  }
+  const gistMatch = gistUrl.exec(url);
+  if (gistMatch) {
+    return `https://gist.githubusercontent.com/${gistMatch[1]}/${gistMatch[2]}/raw`;
   }
   return url;
 }
