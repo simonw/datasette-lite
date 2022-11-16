@@ -121,10 +121,14 @@ async function startDatasette(settings) {
             table_names.add(bit)
             response = await pyfetch(json_url)
             with open("json.json", "wb") as fp:
-                fp.write(await response.bytes())
-            db[bit].insert_all(
-                json.load(open("json.json"))
-            )
+                json_data = json.loads(await response.bytes())
+            # If it's an object, try to find first key that's a list of objects
+            if isinstance(json_data, dict):
+                for key, value in json_data.items():
+                    if isinstance(value, list) and value and isinstance(value[0], dict):
+                        json_data = value
+            assert isinstance(json_data, list), "JSON data must be a list of objects"
+            db[bit].insert_all(json_data)
 
     from datasette.app import Datasette
     ds = Datasette(names, settings={
