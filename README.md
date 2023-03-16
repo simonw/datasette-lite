@@ -134,3 +134,15 @@ Here's a list of plugins that have been tested with Datasette Lite, plus demo li
 - [datasette-copyable](https://datasette.io/plugins/datasette-copyable) - Datasette plugin for outputting tables in formats suitable for copy and paste - [demo](https://lite.datasette.io/?install=datasette-copyable#/fixtures/compound_three_primary_keys.copyable?_table_format=github)
 - [datasette-mp3-audio](https://datasette.io/plugins/datasette-mp3-audio) - Turn `.mp3` URLs into an audio player in the Datasette interface - [demo](https://lite.datasette.io/?install=datasette-mp3-audio&csv=https://gist.githubusercontent.com/simonw/0a30d52feeb3ff60f7d8636b0bde296b/raw/c078a9e5a0151331e2e46c04c1ebe7edc9f45e8c/scotrail-announcements.csv#/data/scotrail-announcements)
 - [datasette-multiline-links](https://datasette.io/plugins/datasette-multiline-links) - Make multiple newline separated URLs clickable in Datasette - [demo](https://lite.datasette.io/?install=datasette-multiline-links&csv=https://docs.google.com/spreadsheets/d/1wZhPLMCHKJvwOkP4juclhjFgqIY8fQFMemwKL2c64vk/export?format=csv#/data?sql=select+edition%2C+headline%2C+text%2C+links%2C+hattips+from+export+where%0Atext+like+'%25'+||+%3Aq+||+'%25'+or+headline+like+'%25'+||+%3Aq+||+'%25'+order+by+edition+desc&q=loans)
+
+## Analytics
+
+By default, hits to `https://lite.datasette.io/` are logged using [Plausible](https://plausible.io/).
+
+Plausible is a [privacy-focused](https://plausible.io/privacy-focused-web-analytics), cookie-free, GDPR-compliant analytics system.
+
+Each navigation within Datasette Lite is logged as a separate event to Plausible, capturing the fragment hash and the URL to the currently loaded file.
+
+The site is hosted on GitHub Pages, which does not offer any analytics that are visible to the site owner. GitHub Pages can only log visits to the `https://lite.datasette.io/` root page - it will not have visibility into any subsequent `#` fragment navigation.
+
+To opt out of analytics, you can add `?analytics=off` or `&analytics=off` to the URL. This will prevent any analytics being sent to Plausible.

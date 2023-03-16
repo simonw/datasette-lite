@@ -169,7 +169,7 @@ datasetteWorker.onmessage = (event) => {
 </form>
 
 <script>
-const useAnalytics = location.hostname == "lite.datasette.io";
+const useAnalytics = (location.hostname == "lite.datasette.io") && (new URLSearchParams(location.search).get('analytics') != 'off');
 useAnalytics && plausible('pageview');
 
 window.onpopstate = function(event) {
@@ -208,7 +208,7 @@ function loadPath(path) {
   path = path.split("#")[0].replace("http://localhost", "");
   console.log({path});
   history.pushState({path: path}, path, "#" + path);
-  useAnalytics && plausible('pageview', {u: location.href.replace('?url=', '').replace('#', '/')});
+  useAnalytics && plausible('pageview', {u: location.href.replace('?', '').replace('#', '/')});
   datasetteWorker.postMessage({path});
 }
 
