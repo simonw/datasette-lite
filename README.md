@@ -47,7 +47,7 @@ If you have data in a JSON file that looks something like this you can load it d
   }
 ]
 ```
-It also works with JSON documents where one of the keys is a list of objects, such as this one:
+This also works with JSON documents where one of the keys is a list of objects, such as this one:
 ```json
 {
   "rows": [
@@ -65,6 +65,13 @@ It also works with JSON documents where one of the keys is a list of objects, su
 In this case it will search for the first key that contains a list of objects.
 
 [This example loads scraped data](https://lite.datasette.io/?json=https://github.com/simonw/scrape-san-mateo-fire-dispatch/blob/main/incidents.json#/data/incidents) from [this repo](https://github.com/simonw/scrape-san-mateo-fire-dispatch).
+
+Newline-delimited JSON works too - for example a file that looks like this:
+
+```
+{"id": 1, "name": "Item 1"}
+{"id": 2, "name": "Item 2"}
+```
 
 ## Loading SQLite databases
 

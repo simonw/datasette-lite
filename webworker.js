@@ -122,7 +122,13 @@ async function startDatasette(settings) {
             table_names.add(bit)
             response = await pyfetch(json_url)
             with open("json.json", "wb") as fp:
-                json_data = json.loads(await response.bytes())
+                json_bytes = await response.bytes()
+                try:
+                    json_data = json.loads(json_bytes)
+                except json.decoder.JSONDecodeError:
+                    # Maybe it's newline-delimited JSON?
+                    # This will raise an unhandled exception if not
+                    json_data = [json.loads(line) for line in json_bytes.splitlines()]
             # If it's an object, try to find first key that's a list of objects
             if isinstance(json_data, dict):
                 for key, value in json_data.items():
