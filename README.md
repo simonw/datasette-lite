@@ -98,6 +98,12 @@ You can paste this URL into the "Load SQL by URL" prompt, or you can pass it as 
 
 SQL will be executed before any CSV imports, so you can use initial SQL to create a table and then use `?csv=` to import data into it.
 
+## Loading metadata
+
+Datasette [supports metadata](https://docs.datasette.io/en/stable/metadata.html), as a `metadata.json` or `metadata.yml` file.
+
+You can load a metadata file in either of these formats by passing a URL to the `?metadata=` query string option.
+
 ## Special handling of GitHub URLs
 
 A tricky thing about using Datasette Lite is that the files you load via URL need to be hosted somewhere that serves open CORS headers.

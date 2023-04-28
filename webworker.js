@@ -78,6 +78,17 @@ async function startDatasette(settings) {
             response = await pyfetch(sql_url)
             sql = await response.string()
             sqlite3.connect("data.db").executescript(sql)
+    metadata = {
+        "about": "Datasette Lite",
+        "about_url": "https://github.com/simonw/datasette-lite"
+    }
+    metadata_url = ${JSON.stringify(settings.metadataUrl)}
+    if metadata_url:
+        response = await pyfetch(metadata_url)
+        content = await response.string()
+        from datasette.utils import parse_metadata
+        metadata = parse_metadata(content)
+
     # Import data from ?csv=URL CSV files/?json=URL JSON files
     csvs = ${JSON.stringify(csvs)}
     jsons = ${JSON.stringify(jsons)}
@@ -140,10 +151,7 @@ async function startDatasette(settings) {
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
-    }, metadata = {
-        "about": "Datasette Lite",
-        "about_url": "https://github.com/simonw/datasette-lite"
-    })
+    }, metadata=metadata)
     await ds.invoke_startup()
     `);
     datasetteLiteReady();
