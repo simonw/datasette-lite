@@ -82,7 +82,7 @@ async function startDatasette(settings) {
         "about": "Datasette Lite",
         "about_url": "https://github.com/simonw/datasette-lite"
     }
-    metadata_url = ${JSON.stringify(settings.metadataUrl)}
+    metadata_url = ${JSON.stringify(settings.metadataUrl || '')}
     if metadata_url:
         response = await pyfetch(metadata_url)
         content = await response.string()
