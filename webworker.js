@@ -121,6 +121,7 @@ async function startDatasette(settings) {
                 types=tracker.types
             )
         for json_url in jsons:
+            pk = None
             bit = json_url.split("/")[-1].split(".")[0].split("?")[0]
             bit = bit.strip()
             if not bit:
@@ -140,13 +141,22 @@ async function startDatasette(settings) {
                     # Maybe it's newline-delimited JSON?
                     # This will raise an unhandled exception if not
                     json_data = [json.loads(line) for line in json_bytes.splitlines()]
-            # If it's an object, try to find first key that's a list of objects
-            if isinstance(json_data, dict):
+            # If it's an object where all values are objects, transform to {"_key": key, **value}
+            if isinstance(json_data, dict) and all(isinstance(v, dict) for v in json_data.values()):
+                fixed = []
+                pk = "_key"
+                for key, value in json_data.items():
+                    value["_key"] = key
+                    fixed.append(value)
+                json_data = fixed
+            elif isinstance(json_data, dict) and any(isinstance(v, list) for v in json_data.values()):
+                # It's an object with at least one value that's a list, use that instead
                 for key, value in json_data.items():
                     if isinstance(value, list) and value and isinstance(value[0], dict):
                         json_data = value
+                        break
             assert isinstance(json_data, list), "JSON data must be a list of objects"
-            db[bit].insert_all(json_data)
+            db[bit].insert_all(json_data, pk=pk)
 
     from datasette.app import Datasette
     ds = Datasette(names, settings={

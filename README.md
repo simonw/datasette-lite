@@ -64,6 +64,24 @@ This also works with JSON documents where one of the keys is a list of objects, 
 ```
 In this case it will search for the first key that contains a list of objects.
 
+If a document is a JSON object where every value is a JSON object, like this:
+
+```json
+{
+  "anchor-positioning": {
+    "spec": "https://drafts.csswg.org/css-anchor-position-1/#anchoring"
+  },
+  "array-at": {
+    "spec": "https://tc39.es/ecma262/multipage/indexed-collections.html#sec-array.prototype.at"
+  },
+  "array-flat": {
+    "caniuse": "array-flat",
+    "spec": "https://tc39.es/ecma262/multipage/indexed-collections.html#sec-array.prototype.flat"
+  }
+}
+```
+Each of those objects will be loaded as a separate row, with a `_key` primary key column containing the object key.
+
 [This example loads scraped data](https://lite.datasette.io/?json=https://github.com/simonw/scrape-san-mateo-fire-dispatch/blob/main/incidents.json#/data/incidents) from [this repo](https://github.com/simonw/scrape-san-mateo-fire-dispatch).
 
 Newline-delimited JSON works too - for example a file that looks like this:
