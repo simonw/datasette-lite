@@ -104,6 +104,18 @@ Some examples to try out:
 - [Global Power Plants](https://lite.datasette.io/?url=https://global-power-plants.datasettes.com/global-power-plants.db) - 33,000 power plants around the world
 - [United States members of congress](https://lite.datasette.io/?url=https://congress-legislators.datasettes.com/legislators.db) - the example database from the [Learn SQL with Datasette](https://datasette.io/tutorials/learn-sql) tutorial
 
+## Loading Parquet
+
+To load a Parquet file, pass a URL to `?parquet=`.
+
+For example this file:
+
+https://github.com/Teradata/kylo/blob/master/samples/sample-data/parquet/userdata1.parquet
+
+Can be loaded like this:
+
+https://lite.datasette.io/?parquet=https://github.com/Teradata/kylo/blob/master/samples/sample-data/parquet/userdata1.parquet
+
 ## Initializing with SQL
 
 You can also initialize the `data.db` database by passing the URL to a SQL file. The easiest way to do this is to create a [GitHub Gist](https://gist.github.com/).
