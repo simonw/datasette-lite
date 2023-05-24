@@ -62,7 +62,7 @@ async function startDatasette(settings) {
     # Install any extra ?install= dependencies
     install_urls = ${JSON.stringify(settings.installUrls)}
     if install_urls:
-        for install^[[C_url in install_urls:
+        for install_url in install_urls:
             await micropip.install(install_url)
     # Execute any ?sql=URL SQL
     sqls = ${JSON.stringify(sources.filter(source => source[0] === "sql")[0]?.[1] || [])}
@@ -121,7 +121,7 @@ async function startDatasette(settings) {
                     response = await pyfetch(url)
                     with open("json.json", "wb") as fp:
                         json_bytes = await response.bytes()
-                        try {
+                        try:
                             json_data = json.loads(json_bytes)
                         except json.decoder.JSONDecodeError:
                             # Maybe it's newline-delimited JSON?
