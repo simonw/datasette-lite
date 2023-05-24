@@ -1,4 +1,4 @@
-importScripts("https://cdn.jsdelivr.net/pyodide/v0.20.0/full/pyodide.js");
+importScripts("https://cdn.jsdelivr.net/pyodide/v0.23.2/full/pyodide.js");
 
 function log(line) {
   console.log({line})
@@ -10,6 +10,7 @@ async function startDatasette(settings) {
   let csvs = [];
   let sqls = [];
   let jsons = [];
+  let parquets = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
   if (settings.initialUrl) {
@@ -32,6 +33,11 @@ async function startDatasette(settings) {
     needsDataDb = true;
     shouldLoadDefaults = false;
   }
+  if (settings.parquetUrls && settings.parquetUrls.length) {
+    parquets = settings.parquetUrls;
+    needsDataDb = true;
+    shouldLoadDefaults = false;
+  }
   if (needsDataDb) {
     toLoad.push(["data.db", 0]);
   }
@@ -40,13 +46,17 @@ async function startDatasette(settings) {
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
   self.pyodide = await loadPyodide({
-    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.20.0/full/"
+    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.2/full/",
+    fullStdLib: true
   });
   await pyodide.loadPackage('micropip', log);
   await pyodide.loadPackage('ssl', log);
   await pyodide.loadPackage('setuptools', log); // For pkg_resources
   try {
     await self.pyodide.runPythonAsync(`
+    # https://github.com/pyodide/pyodide/issues/3880#issuecomment-1560130092
+    import os
+    os.link = os.symlink
     # Grab that fixtures.db database
     import sqlite3
     from pyodide.http import pyfetch
@@ -92,7 +102,8 @@ async function startDatasette(settings) {
     # Import data from ?csv=URL CSV files/?json=URL JSON files
     csvs = ${JSON.stringify(csvs)}
     jsons = ${JSON.stringify(jsons)}
-    if csvs or jsons:
+    parquets = ${JSON.stringify(parquets)}
+    if csvs or jsons or parquets:
         await micropip.install("sqlite-utils==3.28")
         import sqlite_utils, json
         from sqlite_utils.utils import rows_from_file, TypeTracker, Format
@@ -157,7 +168,26 @@ async function startDatasette(settings) {
                         break
             assert isinstance(json_data, list), "JSON data must be a list of objects"
             db[bit].insert_all(json_data, pk=pk)
-
+        if parquets:
+            await micropip.install("fastparquet")
+            import fastparquet
+            for parquet_url in parquets:
+                # Derive table name from parquet URL
+                bit = parquet_url.split("/")[-1].split(".")[0].split("?")[0]
+                bit = bit.strip()
+                if not bit:
+                    bit = "table"
+                prefix = 0
+                base_bit = bit
+                while bit in table_names:
+                    prefix += 1
+                    bit = "{}_{}".format(base_bit, prefix)
+                table_names.add(bit)
+                response = await pyfetch(parquet_url)
+                with open("parquet.parquet", "wb") as fp:
+                    fp.write(await response.bytes())
+                df = fastparquet.ParquetFile("parquet.parquet").to_pandas()
+                db[bit].insert_all(df.to_dict(orient="records"))
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
