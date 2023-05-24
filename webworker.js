@@ -7,10 +7,7 @@ function log(line) {
 
 async function startDatasette(settings) {
   let toLoad = [];
-  let csvs = [];
-  let sqls = [];
-  let jsons = [];
-  let parquets = [];
+  let sources = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
   if (settings.initialUrl) {
@@ -18,26 +15,13 @@ async function startDatasette(settings) {
     toLoad.push([name, settings.initialUrl]);
     shouldLoadDefaults = false;
   }
-  if (settings.csvUrls && settings.csvUrls.length) {
-    csvs = settings.csvUrls;
-    needsDataDb = true;
-    shouldLoadDefaults = false;
-  }
-  if (settings.sqlUrls && settings.sqlUrls.length) {
-    sqls = settings.sqlUrls;
-    needsDataDb = true;
-    shouldLoadDefaults = false;
-  }
-  if (settings.jsonUrls && settings.jsonUrls.length) {
-    jsons = settings.jsonUrls;
-    needsDataDb = true;
-    shouldLoadDefaults = false;
-  }
-  if (settings.parquetUrls && settings.parquetUrls.length) {
-    parquets = settings.parquetUrls;
-    needsDataDb = true;
-    shouldLoadDefaults = false;
-  }
+  ['csv', 'sql', 'json', 'parquet'].forEach(sourceType => {
+    if (settings[`${sourceType}Urls`] && settings[`${sourceType}Urls`].length) {
+      sources.push([sourceType, settings[`${sourceType}Urls`]]);
+      needsDataDb = true;
+      shouldLoadDefaults = false;
+    }
+  });
   if (needsDataDb) {
     toLoad.push(["data.db", 0]);
   }
@@ -78,10 +62,10 @@ async function startDatasette(settings) {
     # Install any extra ?install= dependencies
     install_urls = ${JSON.stringify(settings.installUrls)}
     if install_urls:
-        for install_url in install_urls:
+        for install^[[C_url in install_urls:
             await micropip.install(install_url)
     # Execute any ?sql=URL SQL
-    sqls = ${JSON.stringify(sqls)}
+    sqls = ${JSON.stringify(sources.filter(source => source[0] === "sql")[0]?.[1] || [])}
     if sqls:
         for sql_url in sqls:
             # Fetch that SQL and execute it
@@ -100,80 +84,17 @@ async function startDatasette(settings) {
         metadata = parse_metadata(content)
 
     # Import data from ?csv=URL CSV files/?json=URL JSON files
-    csvs = ${JSON.stringify(csvs)}
-    jsons = ${JSON.stringify(jsons)}
-    parquets = ${JSON.stringify(parquets)}
-    if csvs or jsons or parquets:
+    sources = ${JSON.stringify(sources.filter(source => ['csv', 'json', 'parquet'].includes(source[0])))}
+    if sources:
         await micropip.install("sqlite-utils==3.28")
         import sqlite_utils, json
         from sqlite_utils.utils import rows_from_file, TypeTracker, Format
         db = sqlite_utils.Database("data.db")
         table_names = set()
-        for csv_url in csvs:
-            # Derive table name from CSV URL
-            bit = csv_url.split("/")[-1].split(".")[0].split("?")[0]
-            bit = bit.strip()
-            if not bit:
-                bit = "table"
-            prefix = 0
-            base_bit = bit
-            while bit in table_names:
-                prefix += 1
-                bit = "{}_{}".format(base_bit, prefix)
-            table_names.add(bit)
-            tracker = TypeTracker()
-            response = await pyfetch(csv_url)
-            with open("csv.csv", "wb") as fp:
-                fp.write(await response.bytes())
-            db[bit].insert_all(
-                tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0])
-            )
-            db[bit].transform(
-                types=tracker.types
-            )
-        for json_url in jsons:
-            pk = None
-            bit = json_url.split("/")[-1].split(".")[0].split("?")[0]
-            bit = bit.strip()
-            if not bit:
-                bit = "table"
-            prefix = 0
-            base_bit = bit
-            while bit in table_names:
-                prefix += 1
-                bit = "{}_{}".format(base_bit, prefix)
-            table_names.add(bit)
-            response = await pyfetch(json_url)
-            with open("json.json", "wb") as fp:
-                json_bytes = await response.bytes()
-                try:
-                    json_data = json.loads(json_bytes)
-                except json.decoder.JSONDecodeError:
-                    # Maybe it's newline-delimited JSON?
-                    # This will raise an unhandled exception if not
-                    json_data = [json.loads(line) for line in json_bytes.splitlines()]
-            # If it's an object where all values are objects, transform to {"_key": key, **value}
-            if isinstance(json_data, dict) and all(isinstance(v, dict) for v in json_data.values()):
-                fixed = []
-                pk = "_key"
-                for key, value in json_data.items():
-                    value["_key"] = key
-                    fixed.append(value)
-                json_data = fixed
-            elif isinstance(json_data, dict) and any(isinstance(v, list) for v in json_data.values()):
-                # It's an object with at least one value that's a list, use that instead
-                for key, value in json_data.items():
-                    if isinstance(value, list) and value and isinstance(value[0], dict):
-                        json_data = value
-                        break
-            assert isinstance(json_data, list), "JSON data must be a list of objects"
-            db[bit].insert_all(json_data, pk=pk)
-        if parquets:
-            await micropip.install("fastparquet")
-            import fastparquet
-            for parquet_url in parquets:
-                # Derive table name from parquet URL
-                bit = parquet_url.split("/")[-1].split(".")[0].split("?")[0]
+        for source_type, urls in sources:
+            for url in urls:
+                # Derive table name from URL
+                bit = url.split("/")[-1].split(".")[0].split("?")[0]
                 bit = bit.strip()
                 if not bit:
                     bit = "table"
@@ -183,11 +104,51 @@ async function startDatasette(settings) {
                     prefix += 1
                     bit = "{}_{}".format(base_bit, prefix)
                 table_names.add(bit)
-                response = await pyfetch(parquet_url)
-                with open("parquet.parquet", "wb") as fp:
-                    fp.write(await response.bytes())
-                df = fastparquet.ParquetFile("parquet.parquet").to_pandas()
-                db[bit].insert_all(df.to_dict(orient="records"))
+
+                if source_type == "csv":
+                    tracker = TypeTracker()
+                    response = await pyfetch(url)
+                    with open("csv.csv", "wb") as fp:
+                        fp.write(await response.bytes())
+                    db[bit].insert_all(
+                        tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0])
+                    )
+                    db[bit].transform(
+                        types=tracker.types
+                    )
+                elif source_type == "json":
+                    pk = None
+                    response = await pyfetch(url)
+                    with open("json.json", "wb") as fp:
+                        json_bytes = await response.bytes()
+                        try {
+                            json_data = json.loads(json_bytes)
+                        except json.decoder.JSONDecodeError:
+                            # Maybe it's newline-delimited JSON?
+                            # This will raise an unhandled exception if not
+                            json_data = [json.loads(line) for line in json_bytes.splitlines()]
+                    if isinstance(json_data, dict) and all(isinstance(v, dict) for v in json_data.values()):
+                        fixed = []
+                        pk = "_key"
+                        for key, value in json_data.items():
+                            value["_key"] = key
+                            fixed.append(value)
+                        json_data = fixed
+                    elif isinstance(json_data, dict) and any(isinstance(v, list) for v in json_data.values()):
+                        for key, value in json_data.items():
+                            if isinstance(value, list) and value and isinstance(value[0], dict):
+                                json_data = value
+                                break
+                    assert isinstance(json_data, list), "JSON data must be a list of objects"
+                    db[bit].insert_all(json_data, pk=pk)
+                elif source_type == "parquet":
+                    await micropip.install("fastparquet")
+                    import fastparquet
+                    response = await pyfetch(url)
+                    with open("parquet.parquet", "wb") as fp:
+                        fp.write(await response.bytes())
+                    df = fastparquet.ParquetFile("parquet.parquet").to_pandas()
+                    db[bit].insert_all(df.to_dict(orient="records"))
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
