@@ -33,9 +33,9 @@ async function startDatasette(settings) {
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.2/full/",
     fullStdLib: true
   });
-  await pyodide.loadPackage('micropip', log);
-  await pyodide.loadPackage('ssl', log);
-  await pyodide.loadPackage('setuptools', log); // For pkg_resources
+  await pyodide.loadPackage('micropip', {messageCallback: log});
+  await pyodide.loadPackage('ssl', {messageCallback: log});
+  await pyodide.loadPackage('setuptools', {messageCallback: log}); // For pkg_resources
   try {
     await self.pyodide.runPythonAsync(`
     # https://github.com/pyodide/pyodide/issues/3880#issuecomment-1560130092
