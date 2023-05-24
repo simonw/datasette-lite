@@ -165,6 +165,7 @@ datasetteWorker.onmessage = (event) => {
     <button type="button" class="db-url">Load SQLite DB by URL</button>
     <button type="button" class="csv-url">Load CSV</button>
     <button type="button" class="json-url">Load JSON</button>
+    <button type="button" class="parquet-url">Load Parquet</button>
     <button type="button" class="sql-url">Load SQL</button>
     <a style="text-decoration: none; padding-left: 0.3em; color: #067EFF" href="https://github.com/simonw/datasette-lite">Documentation</a>
   </p>
@@ -303,6 +304,19 @@ document.querySelector('#load-custom button.json-url').addEventListener('click',
     location.href = location.pathname + '?json=' + encodeURIComponent(url);
   } else {
     alert("That JSON could not be loaded");
+  }
+});
+document.querySelector('#load-custom button.parquet-url').addEventListener('click', async function(ev) {
+  ev.preventDefault();
+  let url = fixUrl(prompt("Enter a full URL to a Parquet file"));
+  if (!url) {
+    return;
+  }
+  let valid = await checkUrl(url);
+  if (valid) {
+    location.href = location.pathname + '?parquet=' + encodeURIComponent(url);
+  } else {
+    alert("That Parquet file could not be loaded");
   }
 });
 document.querySelector('#load-custom button.sql-url').addEventListener('click', async function(ev) {
