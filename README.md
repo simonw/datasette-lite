@@ -128,6 +128,12 @@ You can paste this URL into the "Load SQL by URL" prompt, or you can pass it as 
 
 SQL will be executed before any CSV imports, so you can use initial SQL to create a table and then use `?csv=` to import data into it.
 
+## Starting with just an in-memory database
+
+To skip loading the default databases and just provide `/_memory` - useful for demonstrating plugins - pass `?memory=1`, for example:
+
+https://lite.datasette.io/?memory=1
+
 ## Loading metadata
 
 Datasette [supports metadata](https://docs.datasette.io/en/stable/metadata.html), as a `metadata.json` or `metadata.yml` file.

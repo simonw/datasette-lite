@@ -22,6 +22,9 @@ async function startDatasette(settings) {
       shouldLoadDefaults = false;
     }
   });
+  if (settings.memory) {
+    shouldLoadDefaults = false;
+  }
   if (needsDataDb) {
     toLoad.push(["data.db", 0]);
   }
@@ -152,7 +155,7 @@ async function startDatasette(settings) {
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
-    }, metadata=metadata)
+    }, metadata=metadata, memory=${settings.memory ? 'True' : 'False'})
     await ds.invoke_startup()
     `);
     datasetteLiteReady();
