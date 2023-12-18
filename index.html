@@ -259,6 +259,7 @@ async function checkUrl(url, contentTypes) {
       return false;
     }
     if (contentTypes && (!contentTypes.includes(response.headers.get('content-type')))) {
+      console.warn("Unrecognized content-type", response.headers.get('content-type'));
       return false;
     }
     return true;
@@ -277,6 +278,7 @@ const fileTypes = [
       "application/octet-stream",
       "application/x-sqlite3",
       "application/vnd.sqlite3",
+      "binary/octet-stream",
     ],
   },
   { id: "csv-url", prompt: "Enter a full URL to a CSV file", param: "csv" },
