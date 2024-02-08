@@ -114,7 +114,8 @@ async function startDatasette(settings) {
                     with open("csv.csv", "wb") as fp:
                         fp.write(await response.bytes())
                     db[bit].insert_all(
-                        tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0])
+                        tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0]),
+                        alter=True
                     )
                     db[bit].transform(
                         types=tracker.types
@@ -143,7 +144,7 @@ async function startDatasette(settings) {
                                 json_data = value
                                 break
                     assert isinstance(json_data, list), "JSON data must be a list of objects"
-                    db[bit].insert_all(json_data, pk=pk)
+                    db[bit].insert_all(json_data, pk=pk, alter=True)
                 elif source_type == "parquet":
                     await micropip.install("fastparquet")
                     import fastparquet
