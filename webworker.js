@@ -153,6 +153,14 @@ async function startDatasette(settings) {
                         fp.write(await response.bytes())
                     df = fastparquet.ParquetFile("parquet.parquet").to_pandas()
                     df.to_sql(bit, db.conn, if_exists="replace")
+                fts_cols = ${JSON.stringify(settings.ftsCols || "")}
+                try:
+                    db[bit].enable_fts(fts_cols.split(","))
+                except sqlite3.OperationalError:
+                    print("Column not found")
+                    pass
+                drop_cols = ${JSON.stringify(settings.dropCols || "")}
+                db[bit].transform(drop=set(drop_cols.split(",")))
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
