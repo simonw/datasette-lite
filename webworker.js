@@ -10,9 +10,9 @@ async function startDatasette(settings) {
   let sources = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
-  if (settings.initialUrl) {
-    let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
-    toLoad.push([name, settings.initialUrl]);
+  if (settings.sqliteUrl) {
+    let name = settings.sqliteUrl.split('.db')[0].split('/').slice(-1)[0];
+    toLoad.push([name, settings.sqliteUrl]);
     shouldLoadDefaults = false;
   }
   ['csv', 'sql', 'json', 'parquet'].forEach(sourceType => {
