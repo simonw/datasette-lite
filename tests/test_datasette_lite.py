@@ -84,5 +84,5 @@ def test_ref(static_server, browser: Browser) -> Page:
     expect(loading).to_have_css("display", "block")
     # Give it up to 60s to finish loading
     expect(loading).to_have_css("display", "none", timeout=60 * 1000)
-    info = json.loads(page.text_content('pre'))
-    assert info['datasette']['version'] == '1.0a11'
+    info = json.loads(page.text_content("pre"))
+    assert info["datasette"]["version"] == "1.0a11"
