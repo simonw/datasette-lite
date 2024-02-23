@@ -1,3 +1,4 @@
+import json
 from playwright.sync_api import Browser, Page, expect
 from subprocess import Popen, PIPE
 import pathlib
@@ -74,3 +75,14 @@ def test_navigate_to_database(dslite: Page):
         '<tdclass="col-content">1</td><tdclass="col-a">a1</td>'
         '<tdclass="col-b">b1</td><tdclass="col-c">c1</td></tr></tbody>'
     )
+
+
+def test_ref(static_server, browser: Browser) -> Page:
+    page = browser.new_page()
+    page.goto("http://localhost:8123/?ref=1.0a11#/-/versions")
+    loading = page.locator("#loading-indicator")
+    expect(loading).to_have_css("display", "block")
+    # Give it up to 60s to finish loading
+    expect(loading).to_have_css("display", "none", timeout=60 * 1000)
+    info = json.loads(page.text_content('pre'))
+    assert info['datasette']['version'] == '1.0a11'

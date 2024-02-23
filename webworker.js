@@ -10,6 +10,17 @@ async function startDatasette(settings) {
   let sources = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
+  // Which version of Datasette to install?
+  let datasetteToInstall = 'datasette';
+  let pre = 'False';
+  if (settings.ref) {
+    if (settings.ref == 'pre') {
+      pre = 'True';
+    } else {
+      datasetteToInstall = `datasette==${settings.ref}`;
+    }
+  }
+  console.log({datasetteToInstall});
   if (settings.sqliteUrl) {
     let name = settings.sqliteUrl.split('.db')[0].split('/').slice(-1)[0];
     toLoad.push([name, settings.sqliteUrl]);
@@ -61,7 +72,7 @@ async function startDatasette(settings) {
     # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
     await micropip.install("h11==0.12.0")
     await micropip.install("httpx==0.23")
-    await micropip.install("datasette")
+    await micropip.install("${datasetteToInstall}", pre=${pre})
     # Install any extra ?install= dependencies
     install_urls = ${JSON.stringify(settings.installUrls)}
     if install_urls:

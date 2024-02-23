@@ -16,6 +16,19 @@ Datasette Lite runs the full server-side Datasette Python web application direct
 
 When you launch the demo, your browser will download and start executing a full Python interpreter, install the [datasette](https://pypi.org/project/datasette/) package (and its dependencies), download one or more SQLite database files and start the application running in a browser window (actually a [Web Worker](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers) attached to that window).
 
+## Load a different Datasette version
+
+Datasette Lite uses the most recent stable Datasette release [from PyPI](https://pypi.org/project/datasette/).
+
+To use the most recent preview version (alpha or beta) add `?ref=pre`:
+
+- https://lite.datasette.io/?ref=pre
+
+Or for a specific release pass the version number as `?ref=`:
+
+- https://lite.datasette.io/?ref=0.64.2
+- https://lite.datasette.io/?ref=1.0a11
+
 ## Loading CSV data
 
 You can load data from a CSV file hosted online (provided it allows `access-control-allow-origin: *`) by passing that URL as a `?csv=` parameter - or by clicking the "Load CSV by URL" button and pasting in a URL.
