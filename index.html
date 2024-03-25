@@ -142,7 +142,7 @@ datasetteWorker.onmessage = (event) => {
   }
   let html = '';
   if (event.data.error) {
-    html = `<div style="padding: 0.5em"><h3>Error</h3><pre>${escapeHtml(event.data.error)}</pre></div>`;
+    html = `<div style="padding: 0.5em"><h3>Error</h3><pre style="white-space: pre-wrap">${escapeHtml(event.data.error)}</pre></div>`;
   } else if (/^text\/html/.exec(event.data.contentType)) {
     html = event.data.text;
   } else if (/^application\/json/.exec(event.data.contentType)) {
