@@ -1,4 +1,4 @@
-importScripts("https://cdn.jsdelivr.net/pyodide/v0.23.2/full/pyodide.js");
+importScripts("https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js");
 
 function log(line) {
   console.log({line})
@@ -44,7 +44,7 @@ async function startDatasette(settings) {
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
   self.pyodide = await loadPyodide({
-    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.2/full/",
+    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/",
     fullStdLib: true
   });
   await pyodide.loadPackage('micropip', {messageCallback: log});
