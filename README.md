@@ -16,6 +16,19 @@ Datasette Lite runs the full server-side Datasette Python web application direct
 
 When you launch the demo, your browser will download and start executing a full Python interpreter, install the [datasette](https://pypi.org/project/datasette/) package (and its dependencies), download one or more SQLite database files and start the application running in a browser window (actually a [Web Worker](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers) attached to that window).
 
+## Load a different Datasette version
+
+Datasette Lite uses the most recent stable Datasette release [from PyPI](https://pypi.org/project/datasette/).
+
+To use the most recent preview version (alpha or beta) add `?ref=pre`:
+
+- https://lite.datasette.io/?ref=pre
+
+Or for a specific release pass the version number as `?ref=`:
+
+- https://lite.datasette.io/?ref=0.64.2
+- https://lite.datasette.io/?ref=1.0a11
+
 ## Loading CSV data
 
 You can load data from a CSV file hosted online (provided it allows `access-control-allow-origin: *`) by passing that URL as a `?csv=` parameter - or by clicking the "Load CSV by URL" button and pasting in a URL.
@@ -176,6 +189,9 @@ Here's a list of plugins that have been tested with Datasette Lite, plus demo li
 - [datasette-copyable](https://datasette.io/plugins/datasette-copyable) - Datasette plugin for outputting tables in formats suitable for copy and paste - [demo](https://lite.datasette.io/?install=datasette-copyable#/fixtures/compound_three_primary_keys.copyable?_table_format=github)
 - [datasette-mp3-audio](https://datasette.io/plugins/datasette-mp3-audio) - Turn `.mp3` URLs into an audio player in the Datasette interface - [demo](https://lite.datasette.io/?install=datasette-mp3-audio&csv=https://gist.githubusercontent.com/simonw/0a30d52feeb3ff60f7d8636b0bde296b/raw/c078a9e5a0151331e2e46c04c1ebe7edc9f45e8c/scotrail-announcements.csv#/data/scotrail-announcements)
 - [datasette-multiline-links](https://datasette.io/plugins/datasette-multiline-links) - Make multiple newline separated URLs clickable in Datasette - [demo](https://lite.datasette.io/?install=datasette-multiline-links&csv=https://docs.google.com/spreadsheets/d/1wZhPLMCHKJvwOkP4juclhjFgqIY8fQFMemwKL2c64vk/export?format=csv#/data?sql=select+edition%2C+headline%2C+text%2C+links%2C+hattips+from+export+where%0Atext+like+'%25'+||+%3Aq+||+'%25'+or+headline+like+'%25'+||+%3Aq+||+'%25'+order+by+edition+desc&q=loans)
+- [datasette-copyable](https://datasette.io/plugins/datasette-copyable) - adds an interface for copying out data in CSV, TSV, LaTeX, GitHub Markdown tables and many other formats - [demo](https://lite.datasette.io/?install=datasette-copyable#/content/pypi_releases.copyable?_labels=on&_table_format=github)
+- [datasette-statistics](https://datasette.io/plugins/datasette-statistics) - SQL functions for statistical calculations - [demo](https://lite.datasette.io/?install=datasette-statistics#/fixtures?sql=with+numbers+as+%28%0A++++select+1+as+number%0A++++union+all%0A++++select+2%0A++++union+all%0A++++select+3%0A++++union+all%0A++++select+4%0A++++union+all%0A++++select+5%0A%29%0Aselect%0A++statistics_mean%28number%29+as+mean%2C%0A++statistics_median%28number%29+as+median%2C%0A++statistics_stdev%28number%29+as+stdev%0Afrom+numbers%3B)
+- [datasette-simple-html](https://datasette.io/plugins/datasette-simple-html) - simple SQL functions for stripping tags and escaping or unescaping HTML strings - [demo](https://lite.datasette.io/?install=datasette-simple-html#/fixtures?sql=select%0A++html_strip_tags%28%27%3Ch1%3EThis+will+have+%3Cem%3Etags+stripped%3C%2Fem%3E%3C%2Fh1%3E%27%29+as+stripped%2C%0A++html_escape%28%27%3Ch1%3EThis+will+have+%3Cem%3Etags+escaped%3C%2Fem%3E%3C%2Fh1%3E%27%29+as+escaped%2C%0A++html_unescape%28%27%26lt%3Bh1%26gt%3BThis+will+have+%26lt%3Bem%26gt%3Btags+unescaped%26lt%3B%2Fem%26gt%3B%26lt%3B%2Fh1%26gt%3B%27%29+as+unescaped)
 
 ## Analytics
 

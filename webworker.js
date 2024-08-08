@@ -1,4 +1,4 @@
-importScripts("https://cdn.jsdelivr.net/pyodide/v0.23.2/full/pyodide.js");
+importScripts("https://cdn.jsdelivr.net/pyodide/v0.26.0/full/pyodide.js");
 
 function log(line) {
   console.log({line})
@@ -10,9 +10,20 @@ async function startDatasette(settings) {
   let sources = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
-  if (settings.initialUrl) {
-    let name = settings.initialUrl.split('.db')[0].split('/').slice(-1)[0];
-    toLoad.push([name, settings.initialUrl]);
+  // Which version of Datasette to install?
+  let datasetteToInstall = 'datasette';
+  let pre = 'False';
+  if (settings.ref) {
+    if (settings.ref == 'pre') {
+      pre = 'True';
+    } else {
+      datasetteToInstall = `datasette==${settings.ref}`;
+    }
+  }
+  console.log({datasetteToInstall});
+  if (settings.sqliteUrl) {
+    let name = settings.sqliteUrl.split('.db')[0].split('/').slice(-1)[0];
+    toLoad.push([name, settings.sqliteUrl]);
     shouldLoadDefaults = false;
   }
   ['csv', 'sql', 'json', 'parquet'].forEach(sourceType => {
@@ -33,7 +44,7 @@ async function startDatasette(settings) {
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
   self.pyodide = await loadPyodide({
-    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.2/full/",
+    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.0/full/",
     fullStdLib: true
   });
   await pyodide.loadPackage('micropip', {messageCallback: log});
@@ -61,7 +72,9 @@ async function startDatasette(settings) {
     # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
     await micropip.install("h11==0.12.0")
     await micropip.install("httpx==0.23")
-    await micropip.install("datasette")
+    # To avoid possible 'from typing_extensions import deprecated' error:
+    await micropip.install('typing-extensions>=4.12.2')
+    await micropip.install("${datasetteToInstall}", pre=${pre})
     # Install any extra ?install= dependencies
     install_urls = ${JSON.stringify(settings.installUrls)}
     if install_urls:
@@ -114,7 +127,8 @@ async function startDatasette(settings) {
                     with open("csv.csv", "wb") as fp:
                         fp.write(await response.bytes())
                     db[bit].insert_all(
-                        tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0])
+                        tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0]),
+                        alter=True
                     )
                     db[bit].transform(
                         types=tracker.types
@@ -143,7 +157,7 @@ async function startDatasette(settings) {
                                 json_data = value
                                 break
                     assert isinstance(json_data, list), "JSON data must be a list of objects"
-                    db[bit].insert_all(json_data, pk=pk)
+                    db[bit].insert_all(json_data, pk=pk, alter=True)
                 elif source_type == "parquet":
                     await micropip.install("fastparquet")
                     import fastparquet

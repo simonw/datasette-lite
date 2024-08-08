@@ -109,7 +109,7 @@ function fixUrl(url) {
 }
 
 const urlParams = new URLSearchParams(encodeURI(location.search));
-const initialUrl = fixUrl(urlParams.get('url'));
+const sqliteUrl = fixUrl(urlParams.get('url'));
 const memory = !!urlParams.get('memory');
 const metadataUrl = fixUrl(urlParams.get('metadata'));
 const csvUrls = urlParams.getAll('csv').map(fixUrl);
@@ -117,8 +117,9 @@ const sqlUrls = urlParams.getAll('sql').map(fixUrl);
 const jsonUrls = urlParams.getAll('json').map(fixUrl);
 const parquetUrls = urlParams.getAll('parquet').map(fixUrl);
 const installUrls = urlParams.getAll('install');
+const ref = urlParams.get('ref');
 
-datasetteWorker.postMessage({type: 'startup', initialUrl, memory, csvUrls, sqlUrls, jsonUrls, parquetUrls, installUrls, metadataUrl});
+datasetteWorker.postMessage({type: 'startup', ref, sqliteUrl, memory, csvUrls, sqlUrls, jsonUrls, parquetUrls, installUrls, metadataUrl});
 
 let loadingLogs = ["Loading..."];
 
@@ -141,7 +142,7 @@ datasetteWorker.onmessage = (event) => {
   }
   let html = '';
   if (event.data.error) {
-    html = `<div style="padding: 0.5em"><h3>Error</h3><pre>${escapeHtml(event.data.error)}</pre></div>`;
+    html = `<div style="padding: 0.5em"><h3>Error</h3><pre style="white-space: pre-wrap">${escapeHtml(event.data.error)}</pre></div>`;
   } else if (/^text\/html/.exec(event.data.contentType)) {
     html = event.data.text;
   } else if (/^application\/json/.exec(event.data.contentType)) {
