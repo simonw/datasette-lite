@@ -72,7 +72,7 @@ async function startDatasette(settings) {
     # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
     await micropip.install("h11==0.12.0")
     await micropip.install("httpx==0.23")
-    await micropip.install("python-multipart==0.0.12")
+    await micropip.install("python-multipart==0.0.15")
     # To avoid possible 'from typing_extensions import deprecated' error:
     await micropip.install('typing-extensions>=4.12.2')
     await micropip.install("${datasetteToInstall}", pre=${pre})
