@@ -63,7 +63,7 @@ async function startDatasette(settings) {
 
     while True:
         try:
-            csv_std.field_size_limit(field_size_limit)
+            csv.field_size_limit(field_size_limit)
             break
         except OverflowError:
             field_size_limit = int(field_size_limit / 10)
