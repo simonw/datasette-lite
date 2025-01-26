@@ -54,8 +54,20 @@ async function startDatasette(settings) {
     await self.pyodide.runPythonAsync(`
     # https://github.com/pyodide/pyodide/issues/3880#issuecomment-1560130092
     import os
+    import csv
     os.link = os.symlink
-    # Grab that fixtures.db database
+
+    # Increase CSV field size limit to maximim possible
+    # https://stackoverflow.com/a/15063941
+    field_size_limit = sys.maxsize
+
+    while True:
+        try:
+            csv_std.field_size_limit(field_size_limit)
+            break
+        except OverflowError:
+            field_size_limit = int(field_size_limit / 10)
+
     import sqlite3
     from pyodide.http import pyfetch
     names = []
