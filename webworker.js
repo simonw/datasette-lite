@@ -53,7 +53,7 @@ async function startDatasette(settings) {
   try {
     await self.pyodide.runPythonAsync(`
     # https://github.com/pyodide/pyodide/issues/3880#issuecomment-1560130092
-    import os
+    import os, sys
     import csv
     os.link = os.symlink
 
