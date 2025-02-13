@@ -204,3 +204,21 @@ Each navigation within Datasette Lite is logged as a separate event to Plausible
 The site is hosted on GitHub Pages, which does not offer any analytics that are visible to the site owner. GitHub Pages can only log visits to the `https://lite.datasette.io/` root page - it will not have visibility into any subsequent `#` fragment navigation.
 
 To opt out of analytics, you can add `?analytics=off` or `&analytics=off` to the URL. This will prevent any analytics being sent to Plausible.
+
+## Running the tests
+
+Run the tests by running `pytest` after first installing the `dev-requirements.txt` dependencies.
+
+To do that using `uv` first run `playwright install` to download the Playwright browsers:
+
+```bash
+uv run --python 3.10 \
+  --with-requirements dev-requirements.txt \
+  python -m playwright install
+```
+Then run `pytest` like this:
+```bash
+uv run --python 3.10 \
+  --with-requirements dev-requirements.txt \
+  python -m pytest
+```
