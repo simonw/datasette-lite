@@ -178,7 +178,7 @@ async function startDatasette(settings) {
                     with open("parquet.parquet", "wb") as fp:
                         fp.write(await response.bytes())
                     df = fastparquet.ParquetFile("parquet.parquet").to_pandas()
-                    df.to_sql(bit, db.conn, if_exists="replace")
+                    db[bit].insert_all(df.to_dict(orient="records"), alter=True)
     from datasette.app import Datasette
     ds = Datasette(names, settings={
         "num_sql_threads": 0,
