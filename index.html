@@ -108,7 +108,7 @@ function fixUrl(url) {
   return url;
 }
 
-const urlParams = new URLSearchParams(location.search);
+const urlParams = new URLSearchParams(encodeURI(location.search));
 const sqliteUrl = fixUrl(urlParams.get('url'));
 const memory = !!urlParams.get('memory');
 const metadataUrl = fixUrl(urlParams.get('metadata'));
