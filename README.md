@@ -209,16 +209,16 @@ To opt out of analytics, you can add `?analytics=off` or `&analytics=off` to the
 
 Run the tests by running `pytest` after first installing the `dev-requirements.txt` dependencies.
 
-To do that using `uv` first run `playwright install` to download the Playwright browsers:
+Easy way is to run `./test.sh`. Or do this:
 
 ```bash
-uv run --python 3.10 \
+uv run --python 3.12 \
   --with-requirements dev-requirements.txt \
   python -m playwright install
 ```
 Then run `pytest` like this:
 ```bash
-uv run --python 3.10 \
+uv run --python 3.12 \
   --with-requirements dev-requirements.txt \
   python -m pytest
 ```
