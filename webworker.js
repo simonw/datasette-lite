@@ -137,12 +137,52 @@ async function startDatasette(settings) {
                 if source_type == "csv":
                     tracker = TypeTracker()
                     response = await pyfetch(url)
+                    csv_bytes = await response.bytes()
                     with open("csv.csv", "wb") as fp:
-                        fp.write(await response.bytes())
-                    db[bit].insert_all(
-                        tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0]),
-                        alter=True
-                    )
+                        fp.write(csv_bytes)
+
+                    # Auto-detect CSV delimiter (comma vs semicolon)
+                    # Read first few lines to detect the delimiter
+                    sample_lines = []
+                    lines_iter = iter(csv_bytes.decode('utf-8', errors='ignore').splitlines())
+                    for _ in range(min(5, len(csv_bytes.decode('utf-8', errors='ignore').splitlines()))):
+                        try:
+                            sample_lines.append(next(lines_iter))
+                        except StopIteration:
+                            break
+
+                    # Count semicolons vs commas in the sample
+                    semicolon_count = sum(line.count(';') for line in sample_lines)
+                    comma_count = sum(line.count(',') for line in sample_lines)
+
+                    # Determine the most likely delimiter
+                    if semicolon_count > comma_count and semicolon_count > 0:
+                        # Use semicolon as delimiter
+                        # We need to manually parse CSV with semicolon delimiter
+                        import csv as csv_module
+                        from io import StringIO
+
+                        csv_content = csv_bytes.decode('utf-8', errors='ignore')
+                        csv_reader = csv_module.reader(StringIO(csv_content), delimiter=';')
+                        rows = list(csv_reader)
+
+                        if rows:
+                            # Convert to format expected by sqlite-utils
+                            headers = rows[0]
+                            data_rows = rows[1:]
+                            dict_rows = [dict(zip(headers, row)) for row in data_rows]
+
+                            db[bit].insert_all(
+                                tracker.wrap(dict_rows),
+                                alter=True
+                            )
+                    else:
+                        # Use default comma delimiter
+                        db[bit].insert_all(
+                            tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0]),
+                            alter=True
+                        )
+
                     db[bit].transform(
                         types=tracker.types
                     )
