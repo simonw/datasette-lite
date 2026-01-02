@@ -224,6 +224,10 @@ async function startDatasette(settings) {
         "num_sql_threads": 0,
     }, metadata=metadata, memory=${settings.memory ? 'True' : 'False'})
     await ds.invoke_startup()
+
+    # Fetch the CSS from Datasette's static files so we can inject it
+    css_response = await ds.client.get("/-/static/app.css")
+    datasette_css = css_response.text
     `);
     datasetteLiteReady();
   } catch (error) {
@@ -248,17 +252,79 @@ self.onmessage = async (event) => {
   await readyPromise;
   console.log(event, event.data);
   try {
-    let [status, contentType, text] = await self.pyodide.runPythonAsync(
+    let [status, contentType, text, css] = await self.pyodide.runPythonAsync(
       `
       import json
+      import re
+
       response = await ds.client.get(
           ${JSON.stringify(event.data.path)},
           follow_redirects=True
       )
-      [response.status_code, response.headers.get("content-type"), response.text]
+      response_text = response.text
+
+      # For HTML responses, handle CSS and external JS from /-/static/
+      response_css = None
+      if response.headers.get("content-type", "").startswith("text/html"):
+          # Replace the main CSS link tag - we'll inject CSS separately
+          css_link_pattern = r'<link[^>]+href="/-/static/app\\.css[^"]*"[^>]*>'
+          if re.search(css_link_pattern, response_text):
+              response_css = datasette_css
+              response_text = re.sub(css_link_pattern, '', response_text)
+
+          # Handle additional CSS files from /-/static/ by inlining them
+          additional_css_pattern = r'<link([^>]+)href="(/-/static/[^"]+\\.css[^"]*)"([^>]*)>'
+
+          async def replace_css(match):
+              href = match.group(2)
+              # Skip app.css as we handle it separately
+              if 'app.css' in href:
+                  return ''
+              try:
+                  css_response = await ds.client.get(href.split('?')[0])  # Remove query string
+                  css_content = css_response.text
+                  return f'<style>{css_content}</style>'
+              except Exception as e:
+                  return match.group(0)
+
+          css_matches = list(re.finditer(additional_css_pattern, response_text))
+          for match in reversed(css_matches):
+              replacement = await replace_css(match)
+              response_text = response_text[:match.start()] + replacement + response_text[match.end():]
+
+          # Find and inline external scripts from /-/static/
+          script_pattern = r'<script([^>]+)src="(/-/static/[^"]+)"([^>]*)></script>'
+
+          async def replace_script(match):
+              attrs_before = match.group(1)
+              src = match.group(2)
+              attrs_after = match.group(3)
+              try:
+                  script_response = await ds.client.get(src)
+                  script_content = script_response.text
+                  # Combine and clean up attributes, removing defer/async (not applicable to inline scripts)
+                  attrs = (attrs_before + attrs_after).strip()
+                  attrs = re.sub(r'\s*\bdefer\b\s*', ' ', attrs)
+                  attrs = re.sub(r'\s*\basync\b\s*', ' ', attrs)
+                  attrs = attrs.strip()
+                  if attrs:
+                      attrs = ' ' + attrs
+                  # Return inline script with the content
+                  return f'<script{attrs}>{script_content}</script>'
+              except Exception as e:
+                  # If we can't fetch, keep original (will fail in browser but at least we tried)
+                  return match.group(0)
+
+          # Find all external script tags and replace them
+          matches = list(re.finditer(script_pattern, response_text))
+          for match in reversed(matches):  # Reverse to maintain correct positions
+              replacement = await replace_script(match)
+              response_text = response_text[:match.start()] + replacement + response_text[match.end():]
+
+      [response.status_code, response.headers.get("content-type"), response_text, response_css]
       `
     );
-    self.postMessage({status, contentType, text});
+    self.postMessage({status, contentType, text, css});
   } catch (error) {
     self.postMessage({error: error.message});
   }

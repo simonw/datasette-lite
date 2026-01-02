@@ -132,6 +132,33 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
+// Inject Datasette's CSS if not already present
+let datasetteCssInjected = false;
+function injectDatasetteCSS(css) {
+  if (datasetteCssInjected || !css) return;
+  const style = document.createElement('style');
+  style.id = 'datasette-injected-css';
+  style.textContent = css;
+  document.head.appendChild(style);
+  datasetteCssInjected = true;
+}
+
+// Execute script tags that were inserted via innerHTML
+function executeScripts(container) {
+  const scripts = container.querySelectorAll('script');
+  scripts.forEach(oldScript => {
+    const newScript = document.createElement('script');
+    // Copy attributes
+    Array.from(oldScript.attributes).forEach(attr => {
+      newScript.setAttribute(attr.name, attr.value);
+    });
+    // Copy content
+    newScript.textContent = oldScript.textContent;
+    // Replace old script with new one to trigger execution
+    oldScript.parentNode.replaceChild(newScript, oldScript);
+  });
+}
+
 datasetteWorker.onmessage = (event) => {
   var ta = document.getElementById('loading-logs');
   if (event.data.type == 'log') {
@@ -145,13 +172,20 @@ datasetteWorker.onmessage = (event) => {
     html = `<div style="padding: 0.5em"><h3>Error</h3><pre style="white-space: pre-wrap">${escapeHtml(event.data.error)}</pre></div>`;
   } else if (/^text\/html/.exec(event.data.contentType)) {
     html = event.data.text;
+    // Inject Datasette's CSS if provided
+    if (event.data.css) {
+      injectDatasetteCSS(event.data.css);
+    }
   } else if (/^application\/json/.exec(event.data.contentType)) {
     html = `<pre style="padding: 0.5em">${escapeHtml(JSON.stringify(JSON.parse(event.data.text), null, 4))}</pre>`;
   } else {
     html = `<pre style="padding: 0.5em">${escapeHtml(event.data.text)}</pre>`;
   }
-  document.getElementById("output").innerHTML = html;
-  let title = document.getElementById("output").querySelector("title");
+  const output = document.getElementById("output");
+  output.innerHTML = html;
+  // Execute any script tags in the injected HTML
+  executeScripts(output);
+  let title = output.querySelector("title");
   if (title) {
     document.title = title.innerText;
   }
