@@ -204,11 +204,17 @@ async function startDatasette(settings) {
                             value["_key"] = key
                             fixed.append(value)
                         json_data = fixed
-                    elif isinstance(json_data, dict) and any(isinstance(v, list) for v in json_data.values()):
-                        for key, value in json_data.items():
-                            if isinstance(value, list) and value and isinstance(value[0], dict):
-                                json_data = value
-                                break
+                    elif isinstance(json_data, dict):
+                        object_lists = [
+                            value for value in json_data.values()
+                            if (
+                                isinstance(value, list)
+                                and value
+                                and all(isinstance(item, dict) for item in value)
+                            )
+                        ]
+                        if object_lists:
+                            json_data = max(object_lists, key=len)
                     assert isinstance(json_data, list), "JSON data must be a list of objects"
                     db[bit].insert_all(json_data, pk=pk, alter=True)
                 elif source_type == "parquet":
