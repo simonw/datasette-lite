@@ -5,6 +5,31 @@ function log(line) {
   self.postMessage({type: 'log', line: line});
 }
 
+function databaseFiles(sqliteUrls) {
+  const baseNames = sqliteUrls.map(
+    url => url.split('.db')[0].split('/').slice(-1)[0]
+  );
+  const reservedNames = new Set(baseNames);
+  const usedNames = new Set();
+
+  return sqliteUrls.map((url, index) => {
+    const baseName = baseNames[index];
+    let name = baseName;
+    let suffix = 2;
+    while (usedNames.has(name)) {
+      name = `${baseName}_${suffix}`;
+      suffix += 1;
+      // Do not take the name of another, differently named input file.
+      while (reservedNames.has(name) || usedNames.has(name)) {
+        name = `${baseName}_${suffix}`;
+        suffix += 1;
+      }
+    }
+    usedNames.add(name);
+    return [name, url];
+  });
+}
+
 async function startDatasette(settings) {
   let toLoad = [];
   let sources = [];
@@ -21,9 +46,9 @@ async function startDatasette(settings) {
     }
   }
   console.log({datasetteToInstall});
-  if (settings.sqliteUrl) {
-    let name = settings.sqliteUrl.split('.db')[0].split('/').slice(-1)[0];
-    toLoad.push([name, settings.sqliteUrl]);
+  const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);
+  if (sqliteUrls.length) {
+    toLoad.push(...databaseFiles(sqliteUrls));
     shouldLoadDefaults = false;
   }
   ['csv', 'sql', 'json', 'parquet'].forEach(sourceType => {

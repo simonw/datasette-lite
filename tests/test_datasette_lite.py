@@ -77,6 +77,24 @@ def test_navigate_to_database(dslite: Page):
     )
 
 
+def test_load_multiple_database_urls(static_server, browser: Browser):
+    page = browser.new_page()
+    page.goto(
+        "http://localhost:8123/"
+        "?url=https://latest.datasette.io/fixtures.db"
+        "&url=https://datasette.io/content.db"
+        "&url=https://latest.datasette.io/fixtures.db"
+    )
+    loading = page.locator("#loading-indicator")
+    expect(loading).to_have_css("display", "none", timeout=60 * 1000)
+    assert [el.inner_text() for el in page.query_selector_all("h2")] == [
+        "fixtures",
+        "content",
+        "fixtures_2",
+    ]
+    page.close()
+
+
 def test_ref(static_server, browser: Browser) -> Page:
     page = browser.new_page()
     page.goto("http://localhost:8123/?ref=1.0a11#/-/versions")

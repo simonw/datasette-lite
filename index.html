@@ -109,7 +109,7 @@ function fixUrl(url) {
 }
 
 const urlParams = new URLSearchParams(location.search);
-const sqliteUrl = fixUrl(urlParams.get('url'));
+const sqliteUrls = urlParams.getAll('url').map(fixUrl);
 const memory = !!urlParams.get('memory');
 const metadataUrl = fixUrl(urlParams.get('metadata'));
 const csvUrls = urlParams.getAll('csv').map(fixUrl);
@@ -119,7 +119,7 @@ const parquetUrls = urlParams.getAll('parquet').map(fixUrl);
 const installUrls = urlParams.getAll('install');
 const ref = urlParams.get('ref');
 
-datasetteWorker.postMessage({type: 'startup', ref, sqliteUrl, memory, csvUrls, sqlUrls, jsonUrls, parquetUrls, installUrls, metadataUrl});
+datasetteWorker.postMessage({type: 'startup', ref, sqliteUrls, memory, csvUrls, sqlUrls, jsonUrls, parquetUrls, installUrls, metadataUrl});
 
 let loadingLogs = ["Loading..."];
 
