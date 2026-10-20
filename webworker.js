@@ -166,22 +166,14 @@ async function startDatasette(settings) {
                     with open("csv.csv", "wb") as fp:
                         fp.write(csv_bytes)
 
-                    # Auto-detect CSV delimiter (comma vs semicolon)
-                    # Read first few lines to detect the delimiter
-                    sample_lines = []
-                    lines_iter = iter(csv_bytes.decode('utf-8', errors='ignore').splitlines())
-                    for _ in range(min(5, len(csv_bytes.decode('utf-8', errors='ignore').splitlines()))):
-                        try:
-                            sample_lines.append(next(lines_iter))
-                        except StopIteration:
-                            break
+                    # Detect delimiters without counting punctuation in quoted fields.
+                    sample = csv_bytes[:8192].decode('utf-8', errors='ignore')
+                    try:
+                        delimiter = csv.Sniffer().sniff(sample, delimiters=',;').delimiter
+                    except csv.Error:
+                        delimiter = ','
 
-                    # Count semicolons vs commas in the sample
-                    semicolon_count = sum(line.count(';') for line in sample_lines)
-                    comma_count = sum(line.count(',') for line in sample_lines)
-
-                    # Determine the most likely delimiter
-                    if semicolon_count > comma_count and semicolon_count > 0:
+                    if delimiter == ';':
                         # Use semicolon as delimiter
                         # We need to manually parse CSV with semicolon delimiter
                         import csv as csv_module

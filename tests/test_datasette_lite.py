@@ -104,3 +104,35 @@ def test_ref(static_server, browser: Browser) -> Page:
     expect(loading).to_have_css("display", "none", timeout=60 * 1000)
     info = json.loads(page.text_content("pre"))
     assert info["datasette"]["version"] == "1.0a11"
+
+@pytest.mark.parametrize(
+    "csv_text, expected",
+    [
+        ('name,notes\nAlice,"one;two;three;four"\n',
+         [{"rowid": 1, "name": "Alice", "notes": "one;two;three;four"}]),
+        ('name;notes\nAlice;"one,two,three,four"\n',
+         [{"rowid": 1, "name": "Alice", "notes": "one,two,three,four"}]),
+        ('name,notes\nAlice,hello\n',
+         [{"rowid": 1, "name": "Alice", "notes": "hello"}]),
+    ],
+    ids=["quoted-semicolons", "quoted-commas", "plain-comma"],
+)
+def test_csv_delimiter(static_server, browser: Browser, csv_text, expected):
+    context = browser.new_context()
+    context.route(
+        lambda url: url == "http://localhost:8123/delimiter.csv",
+        lambda route: route.fulfill(content_type="text/csv", body=csv_text),
+    )
+    page = context.new_page()
+    try:
+        page.goto(
+            "http://localhost:8123/"
+            "?csv=http://localhost:8123/delimiter.csv"
+            "#/data/delimiter.json?_shape=array"
+        )
+        expect(page.locator("#loading-indicator")).to_have_css(
+            "display", "none", timeout=60 * 1000
+        )
+        assert json.loads(page.locator("pre").inner_text()) == expected
+    finally:
+        context.close()
