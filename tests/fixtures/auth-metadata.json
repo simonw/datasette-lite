@@ -1,0 +1,7 @@
+{
+  "plugins": {
+    "datasette-auth-passwords": {
+      "simon_password_hash": "pbkdf2_sha256$1000$testsalt12345678$EYlhRmcdIOn7xmRwD+K1kp6XeVlt3v80/QPlkV3QXHo="
+    }
+  }
+}

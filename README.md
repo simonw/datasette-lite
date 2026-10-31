@@ -16,6 +16,27 @@ Datasette Lite runs the full server-side Datasette Python web application direct
 
 When you launch the demo, your browser will download and start executing a full Python interpreter, install the [datasette](https://pypi.org/project/datasette/) package (and its dependencies), download one or more SQLite database files and start the application running in a browser window (actually a [Web Worker](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers) attached to that window).
 
+Datasette's pages are displayed in a full-window `<iframe>` pointing at URLs under `/app/<session>/`. Those URLs don't exist on the server: a [service worker](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API) (`sw.js`) intercepts every request for them - link clicks, GET and POST form submissions, `fetch()` calls made by JavaScript, static assets - and the page relays each one to Datasette's [ASGI](https://asgi.readthedocs.io/) application running in Pyodide. This means Datasette's own JavaScript and the JavaScript and CSS provided by plugins work, as do POST forms, CSRF protection, sign-in cookies, file uploads and downloads.
+
+```
+  index.html + shell.js (the page)                webworker.js (Web Worker)
+  ┌───────────────────────────────────┐  relay   ┌──────────────────────────┐
+  │  owns the Web Worker  ────────────┼─────────►│ Pyodide                  │
+  │                                   │◄─────────┼ Datasette ASGI app       │
+  │  <iframe src="app/<session>/..."> │          │ ASGI bridge + cookie jar │
+  │    Datasette pages, JS, forms     │          └──────────────────────────┘
+  └────────┬──────────────────▲───────┘
+   requests│                  │responses
+           ▼                  │
+  sw.js (service worker): finds the tab that owns <session>, asks it to relay
+```
+
+The page you are on mirrors the iframe's location into its `#fragment`, so URLs like `https://lite.datasette.io/?url=...#/fixtures/facetable?_facet=state` can be bookmarked and shared, and the back button works. Each tab gets its own random `<session>` so multiple Datasette Lite tabs with different data can be open at once.
+
+Cookies are kept in a cookie jar inside the Python ASGI bridge (service workers cannot read or set cookies), so they last until the tab is closed or reloaded - as does all of the data.
+
+A browser with service worker support is required. Some private browsing modes (Firefox private windows for example) disable service workers.
+
 ## Load a different Datasette version
 
 Datasette Lite uses the most recent stable Datasette release [from PyPI](https://pypi.org/project/datasette/).
@@ -157,6 +178,22 @@ Datasette [supports metadata](https://docs.datasette.io/en/stable/metadata.html)
 
 You can load a metadata file in either of these formats by passing a URL to the `?metadata=` query string option.
 
+## Loading configuration
+
+Datasette 1.0 alphas take [configuration](https://docs.datasette.io/en/latest/configuration.html) - plugin settings, permissions, `settings:` and more - from a `datasette.yaml` or `datasette.json` file. Pass a URL to one using `?config=`, along with `?ref=pre`:
+
+    https://lite.datasette.io/?ref=pre&config=https://example.com/datasette.yml
+
+Datasette Lite always sets the `base_url` and `num_sql_threads` settings itself.
+
+## Signing in as root
+
+Add `?root=1` to sign in as the `root` actor, the equivalent of running `datasette --root`. This is needed by plugins that write to the database, and for the Datasette 1.0 alpha [write API](https://docs.datasette.io/en/latest/json_api.html#the-json-write-api) and table editing features:
+
+    https://lite.datasette.io/?root=1&ref=pre
+
+Use "Log out" from the menu to return to being an anonymous user.
+
 ## Special handling of GitHub URLs
 
 A tricky thing about using Datasette Lite is that the files you load via URL need to be hosted somewhere that serves open CORS headers.
@@ -176,7 +213,12 @@ Datasette has a number of [plugins](https://datasette.io/plugins) that enable ne
 
 You can install plugins into Datasette Lite by adding one or more `?install=name-of-plugin` parameters to the URL.
 
-Not all plugins are compatible with Datasette Lite at the moment, for example plugins that load their own JavaScript and CSS do not currently work, see [issue #8](https://github.com/simonw/datasette-lite/issues/8).
+Plugins that load their own JavaScript and CSS now work, as do plugins that accept POST requests - for example [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map), [datasette-vega](https://datasette.io/plugins/datasette-vega), [datasette-write](https://datasette.io/plugins/datasette-write), [datasette-edit-schema](https://datasette.io/plugins/datasette-edit-schema), [datasette-upload-csvs](https://datasette.io/plugins/datasette-upload-csvs) and [datasette-auth-passwords](https://datasette.io/plugins/datasette-auth-passwords). Plugins need to be pure Python (or available as Pyodide packages) and must not require threads or subprocesses.
+
+- [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map) - Datasette plugin that shows a map for any data with latitude/longitude columns - [demo](https://lite.datasette.io/?install=datasette-cluster-map&url=https://global-power-plants.datasettes.com/global-power-plants.db#/global-power-plants/global-power-plants)
+- [datasette-write](https://datasette.io/plugins/datasette-write) - Datasette plugin providing a UI for executing SQL writes against the database (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&install=datasette-write#/fixtures/-/write)
+- [datasette-edit-schema](https://datasette.io/plugins/datasette-edit-schema) - Datasette plugin for modifying table schemas (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&install=datasette-edit-schema#/-/edit-schema/fixtures/facetable)
+- [datasette-upload-csvs](https://datasette.io/plugins/datasette-upload-csvs) - Datasette plugin for uploading CSV files and converting them to database tables (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&memory=1&csv=https://raw.githubusercontent.com/fivethirtyeight/data/master/fight-songs/fight-songs.csv&install=datasette-upload-csvs#/-/upload-csvs)
 
 Here's a list of plugins that have been tested with Datasette Lite, plus demo links to see them in action:
 
@@ -226,3 +268,9 @@ uv run --python 3.12 \
   --with-requirements dev-requirements.txt \
   python -m pytest
 ```
+- `tests/test_bridge.py` - fast pure-Python tests of the ASGI bridge, cookie jar and `base_url` workarounds, extracted from `webworker.js`. Install `datasette` to also run them against a real Datasette.
+- `tests/test_datasette_lite.py` - the original browser tests, loading the default databases.
+- `tests/test_url_patterns.py` - every supported `?` option and `#` URL pattern, using the small files in `tests/fixtures/`.
+- `tests/test_plugins_and_post.py` - JavaScript (core and plugins), POST forms, CSRF, sign-in, uploads, downloads, the 1.0 alpha write API, multiple tabs and service worker restarts.
+
+Tests that download from third-party hosts beyond Pyodide, PyPI and the default databases are marked `network`; skip them with `-m "not network"`. To use an existing Chromium binary set `CHROMIUM_EXECUTABLE=/path/to/chrome`. If the browser needs an HTTPS proxy set `DATASETTE_LITE_TEST_PROXY` (or `HTTPS_PROXY`).

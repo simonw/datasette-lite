@@ -1,9 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>Datasette</title>
-  <link rel="stylesheet" href="app.css">
 <style>
+html, body {
+  margin: 0;
+  height: 100%;
+  font-family: Helvetica, Arial, sans-serif;
+}
 #loading-indicator {
   text-align: center;
 }
@@ -24,10 +29,20 @@
   font-size: min(3vw, 1.2em);
   line-height: 1.8;
 }
-textarea#sql-editor {
-  padding: 0.5em;
-  font-size: 1em;
-  line-height: 1.4;
+/* Datasette itself runs in this iframe, served by the service worker */
+#datasette {
+  display: none;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+body.ready #datasette {
+  display: block;
+}
+body.ready #loading-indicator {
+  display: none;
 }
 </style>
 <script defer data-domain="lite.datasette.io" src="https://plausible.io/js/script.manual.js"></script>
@@ -91,228 +106,10 @@ textarea#sql-editor {
 <textarea id="loading-logs">Loading...</textarea>
 </div>
 
-<script>
-const datasetteWorker = new Worker("webworker.js");
-const githubUrl = /^https:\/\/github.com\/(.*)\/(.*)\/blob\/(.*)(\?raw=true)?$/;
-const gistUrl = /^https:\/\/gist.github.com\/(.*)\/(.*)$/;
-
-function fixUrl(url) {
-  const githubMatch = githubUrl.exec(url);
-  if (githubMatch) {
-    return `https://raw.githubusercontent.com/${githubMatch[1]}/${githubMatch[2]}/${githubMatch[3]}`;
-  }
-  const gistMatch = gistUrl.exec(url);
-  if (gistMatch) {
-    return `https://gist.githubusercontent.com/${gistMatch[1]}/${gistMatch[2]}/raw`;
-  }
-  return url;
-}
-
-const urlParams = new URLSearchParams(location.search);
-const sqliteUrls = urlParams.getAll('url').map(fixUrl);
-const memory = !!urlParams.get('memory');
-const metadataUrl = fixUrl(urlParams.get('metadata'));
-const csvUrls = urlParams.getAll('csv').map(fixUrl);
-const sqlUrls = urlParams.getAll('sql').map(fixUrl);
-const jsonUrls = urlParams.getAll('json').map(fixUrl);
-const parquetUrls = urlParams.getAll('parquet').map(fixUrl);
-const installUrls = urlParams.getAll('install');
-const ref = urlParams.get('ref');
-
-datasetteWorker.postMessage({type: 'startup', ref, sqliteUrls, memory, csvUrls, sqlUrls, jsonUrls, parquetUrls, installUrls, metadataUrl});
-
-let loadingLogs = ["Loading..."];
-
-function escapeHtml(unsafe) {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-datasetteWorker.onmessage = (event) => {
-  var ta = document.getElementById('loading-logs');
-  if (event.data.type == 'log') {
-    loadingLogs.push(event.data.line);
-    ta.value = loadingLogs.join("\n");
-    ta.scrollTop = ta.scrollHeight;
-    return;
-  }
-  let html = '';
-  if (event.data.error) {
-    html = `<div style="padding: 0.5em"><h3>Error</h3><pre style="white-space: pre-wrap">${escapeHtml(event.data.error)}</pre></div>`;
-  } else if (/^text\/html/.exec(event.data.contentType)) {
-    html = event.data.text;
-  } else if (/^application\/json/.exec(event.data.contentType)) {
-    html = `<pre style="padding: 0.5em">${escapeHtml(JSON.stringify(JSON.parse(event.data.text), null, 4))}</pre>`;
-  } else {
-    html = `<pre style="padding: 0.5em">${escapeHtml(event.data.text)}</pre>`;
-  }
-  document.getElementById("output").innerHTML = html;
-  let title = document.getElementById("output").querySelector("title");
-  if (title) {
-    document.title = title.innerText;
-  }
-  window.scrollTo({top: 0, left: 0});
-  document.getElementById('loading-indicator').style.display = 'none';
-};
-</script>
-
 <div id="output"></div>
 
-<form id="load-custom">
-  <p style="padding: 1em">
-    <button type="button" class="db-url">Load SQLite DB by URL</button>
-    <button type="button" class="csv-url">Load CSV</button>
-    <button type="button" class="json-url">Load JSON</button>
-    <button type="button" class="parquet-url">Load Parquet</button>
-    <button type="button" class="sql-url">Load SQL</button>
-    <a style="text-decoration: none; padding-left: 0.3em; color: #067EFF" href="https://github.com/simonw/datasette-lite">Documentation</a>
-  </p>
-</form>
+<iframe id="datasette" title="Datasette"></iframe>
 
-<script>
-const useAnalytics = (location.hostname == "lite.datasette.io") && (new URLSearchParams(location.search).get('analytics') != 'off');
-useAnalytics && plausible('pageview');
-
-window.onpopstate = function(event) {
-  console.log(event);
-  datasetteWorker.postMessage({path: event.target.location.hash.split("#")[1] || ""});
-}
-
-// Start with path from location.hash, if available
-if (location.hash) {
-  datasetteWorker.postMessage({path: location.hash.replace(/^\#/, '')});
-} else {
-  datasetteWorker.postMessage({path: "/"});
-}
-
-function isExternal(url) {
-  let startsWithProtocol = !!/^http:\/\/|https:\/\//.exec(url);
-  if (!startsWithProtocol) {
-    return false;
-  }
-  // Is it localhost?
-  return new URL(url).host != 'localhost';
-}
-
-function isFragmentLink(url) {
-  // Is this a #fragment on the current page?
-  let u = new URL(url);
-  return (
-    location.pathname == u.pathname &&
-    location.hostname == u.hostname &&
-    u.hash &&
-    u.hash != location.hash
-  );
-}
-
-function loadPath(path) {
-  path = path.split("#")[0].replace("http://localhost", "");
-  console.log({path});
-  history.pushState({path: path}, path, "#" + path);
-  useAnalytics && plausible('pageview', {u: location.href.replace('?', '').replace('#', '/')});
-  datasetteWorker.postMessage({path});
-}
-
-let output = document.getElementById('output');
-output.addEventListener('click', (ev => {
-  var link = ev.srcElement.closest("a");
-  if (link && link.href) {
-    ev.stopPropagation();
-    ev.preventDefault();
-    if (isFragmentLink(link.href)) {
-      // Jump them to that element, but don't update the URL bar
-      // since we use # in the URL to mean something else
-      let fragment = new URL(link.href).hash.replace("#", "");
-      if (fragment) {
-        let el = document.getElementById(fragment);
-        el.scrollIntoView();
-      }
-      return;
-    }
-    let href = link.getAttribute("href");
-    if (isExternal(href)) {
-      window.open(href);
-      return;
-    }
-    loadPath(href);
-  }
-}), true);
-
-output.addEventListener('submit', (ev => {
-  console.log(ev);
-  ev.stopPropagation();
-  ev.preventDefault();
-  if (ev.target && ev.target.nodeName == "FORM" && ev.target.method.toLowerCase() == "get") {
-    let qs = new URLSearchParams(new FormData(ev.target)).toString();
-    let action = ev.target.getAttribute("action");
-    loadPath(`${action}?${qs}`);
-  }
-}), true);
-
-async function checkUrl(url, contentTypes) {
-  try {
-    response = (await fetch(url, {method: 'HEAD'}));
-    if (response.status != 200) {
-      return false;
-    }
-    if (contentTypes && (!contentTypes.includes(response.headers.get('content-type')))) {
-      return false;
-    }
-    return true;
-  } catch (error) {
-    console.error(error);
-    return false;
-  }
-}
-
-const fileTypes = [
-  {
-    id: "db-url",
-    prompt: "Enter a full URL to a SQLite .db file",
-    param: "url",
-    mimes: [
-      "application/octet-stream",
-      "application/x-sqlite3",
-      "application/vnd.sqlite3",
-    ],
-  },
-  { id: "csv-url", prompt: "Enter a full URL to a CSV file", param: "csv" },
-  { id: "json-url", prompt: "Enter a full URL to a JSON file", param: "json" },
-  {
-    id: "parquet-url",
-    prompt: "Enter a full URL to a Parquet file",
-    param: "parquet",
-  },
-  { id: "sql-url", prompt: "Enter a full URL to a SQL file", param: "sql" },
-];
-
-fileTypes.forEach((fileType) => {
-  document
-    .querySelector(`#load-custom button.${fileType.id}`)
-    .addEventListener("click", async function (ev) {
-      ev.preventDefault();
-      let url = fixUrl(prompt(fileType.prompt));
-      if (!url) {
-        return;
-      }
-      let valid = await checkUrl(url, fileType.mimes);
-      if (valid) {
-        location.href =
-          location.pathname +
-          "?" +
-          fileType.param +
-          "=" +
-          encodeURIComponent(url);
-      } else {
-        alert(`That ${fileType.param.toUpperCase()} could not be loaded`);
-      }
-    });
-});
-
-</script>
+<script src="shell.js"></script>
 </body>
 </html>

@@ -1,2 +1,4 @@
 pytest-playwright==0.7.1
 playwright==1.55.0
+# For tests/test_bridge.py tests against a real Datasette
+datasette
