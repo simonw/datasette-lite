@@ -106,6 +106,8 @@ async function startDatasette(settings) {
         names.append(name)
 
     import micropip
+    # Pyodide bundles idna 3.7, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
+    await micropip.install("idna>=3.18")
     # Workaround for Requested 'h11<0.13,>=0.11', but h11==0.13.0 is already installed
     await micropip.install("h11==0.12.0")
     await micropip.install("httpx==0.23")
