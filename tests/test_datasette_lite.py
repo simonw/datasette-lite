@@ -26,6 +26,20 @@ def test_initial_load(dslite: Page):
     expect(dslite.locator("#datasette")).to_be_visible()
 
 
+def test_loading_screen_listed_the_startup_steps(dslite: Page):
+    steps = dslite.locator("#loading-logs li").all_text_contents()
+    assert steps[0] == "Loading Python (Pyodide)..."
+    assert steps[-1] == "Starting Datasette..."
+    for step in (
+        "Downloading https://latest.datasette.io/fixtures.db",
+        "Downloading https://datasette.io/content.db",
+        "Installing Datasette...",
+    ):
+        assert step in steps
+    # Pyodide's "Loaded x" and "No new packages to load" lines are not steps
+    assert not [step for step in steps if not step.startswith(("Loading", "Downloading", "Installing", "Starting"))]
+
+
 def test_has_two_databases(dslite: Page):
     assert database_names(dslite) == ["fixtures", "content"]
 

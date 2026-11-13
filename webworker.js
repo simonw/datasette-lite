@@ -19,6 +19,17 @@ function log(line) {
   self.postMessage({type: 'log', line: line});
 }
 
+// Pyodide reports several lines for each package it loads ("Loading x",
+// "Loaded x", "No new packages to load"). Only the first is a step worth
+// showing on the loading screen; the rest still go to the console.
+function logPackageLoading(line) {
+  if (line.startsWith("Loading ")) {
+    log(line);
+  } else {
+    console.log({line});
+  }
+}
+
 // A file name without its extension, as Python's Path(name).stem - which is
 // how Datasette names a database: "chinook.sqlite" is the database "chinook"
 function stem(fileName) {
@@ -396,7 +407,12 @@ while True:
         field_size_limit = int(field_size_limit / 10)
 
 
+# Each line passed to log() is shown as a step on the loading screen
+from js import log
+
+
 async def fetch_bytes(url):
+    log("Downloading " + url)
     response = await pyfetch(url)
     if not response.ok:
         raise ValueError("Could not load {}: HTTP {}".format(url, response.status))
@@ -416,6 +432,7 @@ for name, url in to_load:
     names.append(name)
 
 import micropip
+log("Installing Datasette...")
 # Pyodide bundles idna 3.7, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
 await micropip.install("idna>=3.18")
 await micropip.install("python-multipart==0.0.15")
@@ -455,6 +472,7 @@ async def install_resolving_conflicts(requirement, attempts=5, pre=False):
 # release so are the plugins: plugin releases that support a Datasette alpha
 # are published as alphas too, and the stable ones often do not work with it.
 for install_url in settings["install_urls"]:
+    log("Installing " + install_url)
     await install_resolving_conflicts(install_url, pre=settings["pre"])
 # Execute any ?sql=URL SQL
 for sql_url in [url for kind, urls in sources if kind == "sql" for url in urls]:
@@ -583,6 +601,7 @@ if import_sources:
                     )
                 db[bit].insert_all(df.to_dict(orient="records"), alter=True)
 
+log("Starting Datasette...")
 from datasette.app import Datasette
 import inspect
 
@@ -690,9 +709,9 @@ async function startDatasette(settings) {
     indexURL: PYODIDE_URL,
     fullStdLib: true
   });
-  await pyodide.loadPackage('micropip', {messageCallback: log});
-  await pyodide.loadPackage('ssl', {messageCallback: log});
-  await pyodide.loadPackage('setuptools', {messageCallback: log}); // For pkg_resources
+  await pyodide.loadPackage('micropip', {messageCallback: logPackageLoading});
+  await pyodide.loadPackage('ssl', {messageCallback: logPackageLoading});
+  await pyodide.loadPackage('setuptools', {messageCallback: logPackageLoading}); // For pkg_resources
   // Values are passed as data, never interpolated into Python source
   pyodide.globals.set("settings_json", JSON.stringify({
     to_load: toLoad,
@@ -706,7 +725,6 @@ async function startDatasette(settings) {
     root: !!settings.root,
     base_url: settings.baseUrl,
   }));
-  log("Installing Datasette...");
   await pyodide.runPythonAsync(BRIDGE_PY);
   await pyodide.runPythonAsync(STARTUP_PY);
   await pyodide.runPythonAsync(HANDLE_PY);

@@ -312,6 +312,38 @@ def test_load_error_is_displayed(page, static_server):
     page.goto(static_server + "/?csv=" + F + "does-not-exist.csv")
     page.wait_for_function("document.getElementById('output').textContent.length", timeout=180 * 1000)
     expect(page.locator("#output")).to_contain_text("HTTP 404")
+    # The line saying what went wrong leads, the traceback is a click away
+    expect(page.locator("#output .error p")).to_contain_text("HTTP 404")
+    traceback = page.locator("#output .error details pre")
+    expect(traceback).to_be_hidden()
+    page.locator("#output .error summary").click()
+    expect(traceback).to_contain_text("Traceback")
+
+
+def test_loading_screen_fits_a_phone(browser, static_server):
+    # Its own context: a phone-sized one, where pyodide.js never arrives so
+    # the page stays on the loading screen
+    context = browser.new_context(
+        viewport={"width": 375, "height": 700}, is_mobile=True, has_touch=True
+    )
+    try:
+        context.route("**/pyodide.js", lambda route: None)
+        page = context.new_page()
+        page.goto(static_server + "/?memory=1")
+        expect(page.locator("#loading-indicator h1")).to_be_visible()
+        # Without a viewport <meta> a phone lays the page out 980px wide
+        assert page.evaluate("window.innerWidth") == 375
+        page.evaluate(
+            "log('Downloading https://example.com/' + 'long-file-name-'.repeat(30) + '.db')"
+        )
+        steps = page.locator("#loading-logs li")
+        expect(steps).to_have_count(2)
+        expect(steps.last).to_be_visible()
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        ), "the loading screen scrolls sideways"
+    finally:
+        context.close()
 
 
 @pytest.mark.network

@@ -64,8 +64,6 @@ const useAnalytics = (location.hostname == "lite.datasette.io") && (urlParams.ge
 useAnalytics && plausible("pageview");
 
 const frame = document.getElementById("datasette");
-const loadingLogs = ["Loading..."];
-
 function escapeHtml(unsafe) {
   return unsafe
     .replace(/&/g, "&amp;")
@@ -75,17 +73,26 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
+// Each line the worker reports becomes a step on the loading screen: the last
+// one in the list is the step in progress, the ones above it are finished
 function log(line) {
-  const ta = document.getElementById("loading-logs");
-  loadingLogs.push(line);
-  ta.value = loadingLogs.join("\n");
-  ta.scrollTop = ta.scrollHeight;
+  const steps = document.getElementById("loading-logs");
+  const step = document.createElement("li");
+  step.textContent = line;
+  steps.appendChild(step);
+  steps.scrollTop = steps.scrollHeight;
 }
 
 function showError(message) {
   document.getElementById("loading-indicator").style.display = "none";
+  // An error raised by Python arrives as a whole traceback. Its last line says
+  // what went wrong, so lead with that and keep the rest a click away.
+  const lines = message.trim().split("\n");
+  const details = lines.length > 1
+    ? `<details><summary>Details</summary><pre>${escapeHtml(message)}</pre></details>`
+    : "";
   document.getElementById("output").innerHTML =
-    `<div style="padding: 0.5em"><h3>Error</h3><pre style="white-space: pre-wrap">${escapeHtml(message)}</pre></div>`;
+    `<div class="error" role="alert"><h2>Error</h2><p>${escapeHtml(lines[lines.length - 1])}</p>${details}</div>`;
 }
 
 // --- The Pyodide worker ------------------------------------------------------

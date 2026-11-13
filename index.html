@@ -2,32 +2,118 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Datasette</title>
 <style>
 html, body {
   margin: 0;
   height: 100%;
-  font-family: Helvetica, Arial, sans-serif;
 }
-#loading-indicator {
-  text-align: center;
+/* The loading screen borrows Datasette's own colours, fonts and header, so
+   the page that replaces it looks like the same page filling in */
+body {
+  font-family: "Helvetica Neue", sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #111A35;
+  background-color: #F8FAFB;
+  -webkit-text-size-adjust: 100%;
 }
-#loading-indicator svg {
-  height: 20vh;
+#shell-header {
+  box-sizing: border-box;
+  min-height: 2.6rem;
+  padding: 0.6rem 1rem 0.5rem 1rem;
+  background: #276890 linear-gradient(180deg, rgba(96,144,173,1) 0%, rgba(39,104,144,1) 50%);
+  color: rgba(255,255,244,0.9);
 }
-#loading-indicator textarea {
-  height: 40vh;
-  width: 90%;
-  padding: 1em;
-  background-color: #276890;
-  color: white;
-  border: 1px solid black;
-  overflow: auto;
-  outline: none;
-  resize: none;
-  opacity: 0.6;
-  font-size: min(3vw, 1.2em);
-  line-height: 1.8;
+#shell-content {
+  max-width: 44rem;
+  padding: 0 1rem 2rem 1rem;
+}
+#shell-content h1 {
+  margin: 1rem 0 0.75rem 0;
+  font-size: 2rem;
+  line-height: 1.2;
+}
+#loading-logs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 50vh;
+  overflow-y: auto;
+  font-size: 0.9rem;
+}
+#loading-logs li {
+  position: relative;
+  padding: 0.15rem 0 0.15rem 1.6rem;
+  color: #5c6b7a;
+  /* URLs of the files being downloaded can be very long */
+  overflow-wrap: anywhere;
+}
+/* Finished steps get a tick, the step in progress a spinner */
+#loading-logs li::before {
+  content: "";
+  position: absolute;
+  left: 0.2rem;
+  top: 0.45rem;
+  width: 0.35rem;
+  height: 0.65rem;
+  border: solid #54AC8E;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+#loading-logs li:last-child {
+  color: #111A35;
+  font-weight: 600;
+}
+#loading-logs li:last-child::before {
+  left: 0;
+  top: 0.4rem;
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid #c5d6e2;
+  border-top-color: #276890;
+  border-radius: 50%;
+  transform: none;
+  animation: shell-spin 0.8s linear infinite;
+}
+@keyframes shell-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #loading-logs li:last-child::before {
+    animation-duration: 4s;
+  }
+}
+#loading-note {
+  margin: 1.25rem 0 0 0;
+  font-size: 0.85rem;
+  color: #5c6b7a;
+}
+#output .error {
+  margin-top: 1rem;
+  padding: 1rem;
+  background-color: rgba(208,2,27,0.3);
+}
+#output .error h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+}
+#output .error p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+#output .error details {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+#output .error summary {
+  cursor: pointer;
+}
+#output .error pre {
+  margin: 0.5rem 0 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* Datasette itself runs in this iframe, served by the service worker */
 #datasette {
@@ -41,6 +127,7 @@ html, body {
 body.ready #datasette {
   display: block;
 }
+body.ready #shell-header,
 body.ready #loading-indicator {
   display: none;
 }
@@ -50,63 +137,16 @@ body.ready #loading-indicator {
 </head>
 <body>
 
-<div id="loading-indicator">
-  <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-  width="200px" height="200px" viewBox="0 0 100 100">
-<g transform="rotate(0 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.9166666666666666s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(30 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.8333333333333334s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(60 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.75s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(90 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.6666666666666666s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(120 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.5833333333333334s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(150 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.5s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(180 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.4166666666666667s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(210 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.3333333333333333s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(240 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.25s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(270 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.16666666666666666s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(300 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="-0.08333333333333333s" repeatCount="indefinite"></animate>
-  </rect>
-</g><g transform="rotate(330 50 50)">
-  <rect x="47" y="24" rx="3" ry="6" width="6" height="12" fill="#292664">
-    <animate attributeName="opacity" values="1;0" keyTimes="0;1" dur="1s" begin="0s" repeatCount="indefinite"></animate>
-  </rect>
-</g>
-</svg>
-<textarea id="loading-logs">Loading...</textarea>
-</div>
+<header id="shell-header">Datasette Lite</header>
 
-<div id="output"></div>
+<main id="shell-content">
+  <div id="loading-indicator">
+    <h1>Loading Datasette</h1>
+    <ol id="loading-logs" role="log" aria-label="Startup progress"><li>Loading Python (Pyodide)...</li></ol>
+    <p id="loading-note">Datasette is starting up inside your browser, using Python compiled to WebAssembly. The first visit takes longest - after that most of it comes from your browser's cache.</p>
+  </div>
+  <div id="output"></div>
+</main>
 
 <iframe id="datasette" title="Datasette"></iframe>
 
