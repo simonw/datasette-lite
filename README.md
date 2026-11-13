@@ -141,8 +141,8 @@ Pass `url` more than once to load multiple databases. Each database is named aft
 
 Some examples to try out:
 
-- [Global Power Plants](https://lite.datasette.io/?url=https://global-power-plants.datasettes.com/global-power-plants.db) - 33,000 power plants around the world
-- [United States members of congress](https://lite.datasette.io/?url=https://congress-legislators.datasettes.com/legislators.db) - the example database from the [Learn SQL with Datasette](https://datasette.io/tutorials/learn-sql) tutorial
+- [Global Power Plants](https://lite.datasette.io/?url=https://datasette.io/global-power-plants.db) - 33,000 power plants around the world
+- [United States members of congress](https://lite.datasette.io/?url=https://datasette.io/legislators.db) - the example database from the [Learn SQL with Datasette](https://datasette.io/tutorials/learn-sql) tutorial
 
 ## Loading Parquet
 
@@ -219,7 +219,7 @@ Plugins that load their own JavaScript and CSS now work, as do plugins that acce
 
 Some plugins hardcode root-relative URLs such as `/-/password-tool` rather than respecting Datasette's `base_url` setting. Datasette Lite rewrites those in HTML attributes and routes requests for them back to the right tab. One case is not handled in Firefox and Safari: JavaScript that navigates to such a URL (`location.href = "/-/..."`) from a table, row or query page gets a 404, because those browsers give the service worker no way to tell which tab the navigation came from. This works in Chrome and other Chromium-based browsers.
 
-- [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map) - Datasette plugin that shows a map for any data with latitude/longitude columns - [demo](https://lite.datasette.io/?install=datasette-cluster-map&url=https://global-power-plants.datasettes.com/global-power-plants.db#/global-power-plants/global-power-plants)
+- [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map) - Datasette plugin that shows a map for any data with latitude/longitude columns - [demo](https://lite.datasette.io/?install=datasette-cluster-map&url=https://datasette.io/global-power-plants.db#/global-power-plants/global-power-plants)
 - [datasette-write](https://datasette.io/plugins/datasette-write) - Datasette plugin providing a UI for executing SQL writes against the database (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&install=datasette-write#/fixtures/-/write)
 - [datasette-edit-schema](https://datasette.io/plugins/datasette-edit-schema) - Datasette plugin for modifying table schemas (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&install=datasette-edit-schema#/-/edit-schema/fixtures/facetable)
 - [datasette-upload-csvs](https://datasette.io/plugins/datasette-upload-csvs) - Datasette plugin for uploading CSV files and converting them to database tables (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&memory=1&csv=https://raw.githubusercontent.com/fivethirtyeight/data/master/fight-songs/fight-songs.csv&install=datasette-upload-csvs#/-/upload-csvs)
