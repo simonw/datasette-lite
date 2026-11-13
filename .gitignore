@@ -1,3 +1,5 @@
 .vscode
 .DS_Store
-
+tests/fixtures/generated/
+__pycache__/
+.pytest_cache/
