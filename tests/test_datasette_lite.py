@@ -6,7 +6,7 @@ import json
 import pytest
 from playwright.sync_api import Page, expect
 
-from conftest import boot, wait_for_boot
+from conftest import boot, database_names, wait_for_boot
 
 
 @pytest.fixture(scope="module")
@@ -16,7 +16,7 @@ def dslite(static_server, shared_context):
     expect(page.locator("#loading-indicator")).to_be_visible()
     wait_for_boot(page)
     frame = page.frame_locator("#datasette")
-    expect(frame.locator("h2").first).to_be_visible()
+    expect(frame.locator("h1").first).to_be_visible()
     yield page
     page.close()
 
@@ -27,15 +27,13 @@ def test_initial_load(dslite: Page):
 
 
 def test_has_two_databases(dslite: Page):
-    frame = dslite.frame_locator("#datasette")
-    expect(frame.locator("h2")).to_have_text(["fixtures", "content"])
+    assert database_names(dslite) == ["fixtures", "content"]
 
 
 def test_navigate_to_database(dslite: Page):
     frame = dslite.frame_locator("#datasette")
-    h2 = frame.locator("h2").first
-    expect(h2).to_have_text("fixtures")
-    h2.locator("a").click()
+    # The 1.0 homepage has no link to a database page, so go by #fragment
+    dslite.evaluate("location.hash = '#/fixtures'")
     expect(dslite).to_have_title("fixtures")
     assert dslite.evaluate("location.hash") == "#/fixtures"
     # Datasette's own JavaScript runs now: the SQL textarea is a CodeMirror editor
@@ -49,14 +47,15 @@ def test_navigate_to_database(dslite: Page):
     frame.locator("input[type=submit]").first.click()
     expect(dslite).to_have_title("fixtures: SELECT * FROM no_primary_key limit 1")
     table = frame.locator("table.rows-and-columns")
-    table_html = "".join(table.inner_html().split())
-    assert table_html == (
-        '<thead><tr><thclass="col-content"scope="col">content</th>'
-        '<thclass="col-a"scope="col">a</th><thclass="col-b"scope="col">b</th>'
-        '<thclass="col-c"scope="col">c</th></tr></thead><tbody><tr>'
-        '<tdclass="col-content">1</td><tdclass="col-a">a1</td>'
-        '<tdclass="col-b">b1</td><tdclass="col-c">c1</td></tr></tbody>'
-    )
+    # Compare classes and cell values rather than exact HTML, which differs
+    # between Datasette versions (1.0 adds a menu button to each header)
+    assert [th.get_attribute("class") for th in table.locator("th").all()] == [
+        "col-content", "col-a", "col-b", "col-c",
+    ]
+    assert [td.get_attribute("class") for td in table.locator("td").all()] == [
+        "col-content", "col-a", "col-b", "col-c",
+    ]
+    assert table.locator("td").all_text_contents() == ["1", "a1", "b1", "c1"]
 
 
 def test_load_multiple_database_urls(static_server, shared_context):
@@ -68,7 +67,7 @@ def test_load_multiple_database_urls(static_server, shared_context):
         "&url=https://datasette.io/content.db"
         "&url=https://latest.datasette.io/fixtures.db",
     )
-    expect(frame.locator("h2")).to_have_text(["fixtures", "content", "fixtures_2"])
+    assert database_names(page) == ["fixtures", "content", "fixtures_2"]
     page.close()
 
 

@@ -9,7 +9,7 @@ from urllib.parse import quote
 import pytest
 from playwright.sync_api import Page, expect
 
-from conftest import app_path, boot, datasette_frame, wait_for_boot, wait_for_hash
+from conftest import app_path, boot, database_names, datasette_frame, wait_for_boot, wait_for_hash
 
 F = "tests/fixtures/"
 
@@ -34,17 +34,17 @@ def iframe_base(page: Page):
 
 
 def test_url_loads_database_named_from_filename(page, static_server):
-    frame = boot(page, static_server + "/?url=" + F + "generated/demo.db")
-    expect(frame.locator("h2")).to_have_text(["demo"])
+    boot(page, static_server + "/?url=" + F + "generated/demo.db")
+    assert database_names(page) == ["demo"]
 
 
 def test_url_repeated_gets_suffixes(page, static_server):
-    frame = boot(
+    boot(
         page,
         static_server
         + "/?url={F}generated/demo.db&url={F}generated/other.db&url={F}generated/demo.db".format(F=F),
     )
-    expect(frame.locator("h2")).to_have_text(["demo", "other", "demo_2"])
+    assert database_names(page) == ["demo", "other", "demo_2"]
 
 
 def test_url_database_names_drop_the_file_extension(page, static_server):
@@ -58,8 +58,7 @@ def test_url_database_names_drop_the_file_extension(page, static_server):
         wait_for="td.col-name",
     )
     expect(frame.locator("td.col-name").first).to_have_text("Cleo")
-    page.evaluate("location.hash = '#/'")
-    expect(frame.locator("h2")).to_have_text(["extension", "dotted", "demo", "demo_2"])
+    assert database_names(page) == ["extension", "dotted", "demo", "demo_2"]
 
 
 def test_csv_with_type_detection(page, static_server):
@@ -119,8 +118,8 @@ def test_sql_runs_before_csv(page, static_server):
 
 
 def test_memory(page, static_server):
-    frame = boot(page, static_server + "/?memory=1")
-    expect(frame.locator("h2")).to_have_text(["_memory"])
+    boot(page, static_server + "/?memory=1")
+    assert database_names(page) == ["_memory"]
 
 
 def test_metadata_json(page, static_server):
@@ -158,20 +157,32 @@ def test_install_multiple_plugins(page, static_server):
     expect(frame.locator("td.col-m")).to_have_text("1.0")
 
 
-def test_ref_pre_installs_prerelease(page, static_server):
-    frame = boot(page, static_server + "/?memory=1&ref=pre#/-/versions.json", wait_for="pre")
-    info = json.loads(frame.locator("pre").text_content())
-    assert re.match(r"^1\.0a\d+", info["datasette"]["version"])
+def datasette_version(page, static_server, options):
+    frame = boot(page, static_server + "/?memory=1" + options + "#/-/versions.json", wait_for="pre")
+    return json.loads(frame.locator("pre").text_content())["datasette"]["version"]
+
+
+def test_default_is_the_most_recent_release_including_previews(page, static_server):
+    default = datasette_version(page, static_server, "")
+    # ?ref=pre is the old name for what is now the default
+    assert datasette_version(page, static_server, "&ref=pre") == default
+    assert re.match(r"^1\.0a\d+", default)
+
+
+def test_ref_stable_installs_the_stable_release(page, static_server):
+    version = datasette_version(page, static_server, "&ref=stable")
+    # No alpha, beta or release candidate suffix
+    assert re.match(r"^\d+(\.\d+)+$", version), version
 
 
 def test_config_requires_1_0(page, static_server):
-    page.goto(static_server + "/?memory=1&config=" + F + "config.yml")
+    page.goto(static_server + "/?ref=stable&memory=1&config=" + F + "config.yml")
     page.wait_for_function("document.getElementById('output').textContent.length", timeout=180 * 1000)
     expect(page.locator("#output")).to_contain_text("?config= requires Datasette 1.0a8")
 
 
-def test_config_with_ref_pre(page, static_server):
-    boot(page, static_server + "/?ref=pre&config={F}config.yml&csv={F}items.csv".format(F=F))
+def test_config(page, static_server):
+    boot(page, static_server + "/?config={F}config.yml&csv={F}items.csv".format(F=F))
     base = iframe_base(page)
     settings = table_json(page, base + "/-/settings.json")
     assert settings["default_page_size"] == 2
@@ -192,11 +203,10 @@ def test_hash_without_leading_slash(page, static_server):
 def test_navigation_updates_hash_and_back_button(page, static_server):
     frame = boot(page, static_server + "/?csv=" + F + "items.csv")
     assert app_path(page) == "/"
-    frame.locator("h2 a", has_text="data").click()
-    wait_for_hash(page, "^/data$")
-    expect(page).to_have_title("data")
-    frame.locator("a", has_text="items").first.click()
+    # Follow a link: the homepage links to each table in every Datasette version
+    frame.locator("a[href$='/data/items']").first.click()
     wait_for_hash(page, "^/data/items$")
+    expect(page).to_have_title(re.compile("^data: items"))
     expect(frame.locator("h1")).to_contain_text("items")
     # Sort by a column - adds a query string
     datasette_frame(page).evaluate("location.href = location.pathname + '?_sort_desc=qty'")
@@ -206,7 +216,7 @@ def test_navigation_updates_hash_and_back_button(page, static_server):
     wait_for_hash(page, "^/data/items$")
     expect(frame.locator("td.col-name").first).to_have_text("Widget")
     page.go_back()
-    wait_for_hash(page, "^/data$")
+    wait_for_hash(page, "^/$")
     page.go_forward()
     wait_for_hash(page, "^/data/items$")
     # Startup options are preserved throughout
@@ -259,7 +269,8 @@ def test_load_buttons(page, static_server):
     page.wait_for_url("**/?csv=*")
     assert page.url == static_server + "/?csv=" + quote(csv_url, safe="")
     wait_for_boot(page)
-    expect(page.frame_locator("#datasette").locator("h2")).to_have_text(["data"])
+    expect(page.frame_locator("#datasette").locator("footer").first).to_be_attached()
+    assert database_names(page) == ["data"]
 
 
 def test_github_and_gist_urls_rewritten(page, static_server):

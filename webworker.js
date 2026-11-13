@@ -433,14 +433,14 @@ except ValueError:
 import re
 
 
-async def install_resolving_conflicts(requirement, attempts=5):
+async def install_resolving_conflicts(requirement, attempts=5, pre=False):
     """micropip can't upgrade an already installed package, so a plugin that
     needs e.g. click>=8.3.1 fails if Datasette already pulled in Pyodide's
     bundled click 8.1.7. Nothing has been imported yet at this point, so it is
     safe to uninstall the conflicting package and install what was asked for."""
     for _ in range(attempts):
         try:
-            await micropip.install(requirement)
+            await micropip.install(requirement, pre=pre)
             return
         except ValueError as ex:
             match = re.search(r"Requested '(.+?)', but (\S+)==\S+ is already installed", str(ex))
@@ -448,12 +448,14 @@ async def install_resolving_conflicts(requirement, attempts=5):
                 raise
             micropip.uninstall(match.group(2))
             await micropip.install(match.group(1))
-    await micropip.install(requirement)
+    await micropip.install(requirement, pre=pre)
 
 
-# Install any extra ?install= dependencies
+# Install any extra ?install= dependencies. When Datasette itself is a preview
+# release so are the plugins: plugin releases that support a Datasette alpha
+# are published as alphas too, and the stable ones often do not work with it.
 for install_url in settings["install_urls"]:
-    await install_resolving_conflicts(install_url)
+    await install_resolving_conflicts(install_url, pre=settings["pre"])
 # Execute any ?sql=URL SQL
 for sql_url in [url for kind, urls in sources if kind == "sql" for url in urls]:
     # Fetch that SQL and execute it
@@ -588,7 +590,7 @@ datasette_kwargs = {}
 if config is not None:
     if "config" not in inspect.signature(Datasette.__init__).parameters:
         raise ValueError(
-            "?config= requires Datasette 1.0a8 or later - try adding &ref=pre"
+            "?config= requires Datasette 1.0a8 or later - try removing &ref="
         )
     if isinstance(config.get("settings"), dict):
         # These are controlled by Datasette Lite itself
@@ -649,15 +651,17 @@ async function startDatasette(settings) {
   let sources = [];
   let needsDataDb = false;
   let shouldLoadDefaults = true;
-  // Which version of Datasette to install?
+  // Which version of Datasette to install? By default the most recent release
+  // of any kind, alphas and betas included. ?ref=stable is the most recent
+  // stable release, ?ref=1.0a11 (or any version number) is that exact release.
+  // ?ref=pre is what the default used to be called, and still works.
   let datasetteToInstall = 'datasette';
-  let pre = false;
-  if (settings.ref) {
-    if (settings.ref == 'pre') {
-      pre = true;
-    } else {
-      datasetteToInstall = `datasette==${settings.ref}`;
-    }
+  let pre = true;
+  if (settings.ref == 'stable') {
+    pre = false;
+  } else if (settings.ref && settings.ref != 'pre') {
+    datasetteToInstall = `datasette==${settings.ref}`;
+    pre = false;
   }
   const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);
   if (sqliteUrls.length) {

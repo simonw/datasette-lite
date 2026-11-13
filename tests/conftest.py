@@ -148,6 +148,19 @@ def datasette_frame(page: Page):
     return page.locator("#datasette").element_handle().content_frame()
 
 
+def database_names(page: Page):
+    """The attached databases, in order. Read from /-/databases.json because
+    the homepage lists them differently in Datasette 0.x and 1.0."""
+    return datasette_frame(page).evaluate(
+        """async () => {
+            const base = location.pathname.match(/^.*?\\/app\\/[^/]+/)[0];
+            const data = await (await fetch(base + "/-/databases.json")).json();
+            // A list in Datasette 0.x, {"databases": [...]} in 1.0
+            return (Array.isArray(data) ? data : data.databases).map((database) => database.name);
+        }"""
+    )
+
+
 def app_path(page: Page):
     "The current Datasette path, as mirrored in the #fragment"
     return page.evaluate("location.hash").lstrip("#")

@@ -41,16 +41,18 @@ A browser with service worker support is required. Some private browsing modes (
 
 ## Load a different Datasette version
 
-Datasette Lite uses the most recent stable Datasette release [from PyPI](https://pypi.org/project/datasette/).
+Datasette Lite uses the most recent Datasette release [from PyPI](https://pypi.org/project/datasette/), including alpha and beta preview releases. At the moment that means the Datasette 1.0 alphas.
 
-To use the most recent preview version (alpha or beta) add `?ref=pre`:
+To use the most recent stable release instead, add `?ref=stable`:
 
-- https://lite.datasette.io/?ref=pre
+- https://lite.datasette.io/?ref=stable
 
 Or for a specific release pass the version number as `?ref=`:
 
 - https://lite.datasette.io/?ref=0.64.2
 - https://lite.datasette.io/?ref=1.0a11
+
+`?ref=pre` used to be how you asked for a preview release. It still works, and is now the same as leaving `?ref=` out.
 
 ## Loading CSV data
 
@@ -182,9 +184,11 @@ You can load a metadata file in either of these formats by passing a URL to the 
 
 ## Loading configuration
 
-Datasette 1.0 alphas take [configuration](https://docs.datasette.io/en/latest/configuration.html) - plugin settings, permissions, `settings:` and more - from a `datasette.yaml` or `datasette.json` file. Pass a URL to one using `?config=`, along with `?ref=pre`:
+Datasette 1.0 alphas take [configuration](https://docs.datasette.io/en/latest/configuration.html) - plugin settings, permissions, `settings:` and more - from a `datasette.yaml` or `datasette.json` file. Pass a URL to one using `?config=`:
 
-    https://lite.datasette.io/?ref=pre&config=https://example.com/datasette.yml
+    https://lite.datasette.io/?config=https://example.com/datasette.yml
+
+This needs Datasette 1.0a8 or later, so it does not work with `?ref=stable` while the stable release is 0.65.
 
 Datasette Lite always sets the `base_url` and `num_sql_threads` settings itself.
 
@@ -192,7 +196,7 @@ Datasette Lite always sets the `base_url` and `num_sql_threads` settings itself.
 
 Add `?root=1` to sign in as the `root` actor, the equivalent of running `datasette --root`. This is needed by plugins that write to the database, and for the Datasette 1.0 alpha [write API](https://docs.datasette.io/en/latest/json_api.html#the-json-write-api) and table editing features:
 
-    https://lite.datasette.io/?root=1&ref=pre
+    https://lite.datasette.io/?root=1
 
 Use "Log out" from the menu to return to being an anonymous user.
 
@@ -217,9 +221,11 @@ You can install plugins into Datasette Lite by adding one or more `?install=name
 
 Plugins that load their own JavaScript and CSS now work, as do plugins that accept POST requests - for example [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map), [datasette-vega](https://datasette.io/plugins/datasette-vega), [datasette-write](https://datasette.io/plugins/datasette-write), [datasette-edit-schema](https://datasette.io/plugins/datasette-edit-schema), [datasette-upload-csvs](https://datasette.io/plugins/datasette-upload-csvs) and [datasette-auth-passwords](https://datasette.io/plugins/datasette-auth-passwords). Plugins need to be pure Python (or available as Pyodide packages) and must not require threads or subprocesses.
 
+Because Datasette Lite runs a preview release of Datasette by default, `?install=` also picks the most recent preview release of each plugin - that is where plugin authors publish support for the Datasette alphas. Some plugins do not work with the latest alpha yet. If one misbehaves, add `?ref=stable` to run it against the stable Datasette release, which installs the plugin's stable release too. [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map) currently needs this.
+
 Some plugins hardcode root-relative URLs such as `/-/password-tool` rather than respecting Datasette's `base_url` setting. Datasette Lite rewrites those in HTML attributes and routes requests for them back to the right tab. One case is not handled in Firefox and Safari: JavaScript that navigates to such a URL (`location.href = "/-/..."`) from a table, row or query page gets a 404, because those browsers give the service worker no way to tell which tab the navigation came from. This works in Chrome and other Chromium-based browsers.
 
-- [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map) - Datasette plugin that shows a map for any data with latitude/longitude columns - [demo](https://lite.datasette.io/?install=datasette-cluster-map&url=https://datasette.io/global-power-plants.db#/global-power-plants/global-power-plants)
+- [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map) - Datasette plugin that shows a map for any data with latitude/longitude columns - [demo](https://lite.datasette.io/?ref=stable&install=datasette-cluster-map&url=https://datasette.io/global-power-plants.db#/global-power-plants/global-power-plants)
 - [datasette-write](https://datasette.io/plugins/datasette-write) - Datasette plugin providing a UI for executing SQL writes against the database (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&install=datasette-write#/fixtures/-/write)
 - [datasette-edit-schema](https://datasette.io/plugins/datasette-edit-schema) - Datasette plugin for modifying table schemas (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&install=datasette-edit-schema#/-/edit-schema/fixtures/facetable)
 - [datasette-upload-csvs](https://datasette.io/plugins/datasette-upload-csvs) - Datasette plugin for uploading CSV files and converting them to database tables (needs `?root=1`) - [demo](https://lite.datasette.io/?root=1&memory=1&csv=https://raw.githubusercontent.com/fivethirtyeight/data/master/fight-songs/fight-songs.csv&install=datasette-upload-csvs#/-/upload-csvs)

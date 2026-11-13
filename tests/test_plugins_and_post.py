@@ -8,7 +8,7 @@ import time
 import pytest
 from playwright.sync_api import Browser, Page, expect
 
-from conftest import app_path, boot, datasette_frame, wait_for_boot, wait_for_hash
+from conftest import app_path, boot, database_names, datasette_frame, wait_for_boot, wait_for_hash
 
 F = "tests/fixtures/"
 
@@ -41,8 +41,13 @@ def actor(page: Page):
 # --- Core Datasette JavaScript ------------------------------------------------
 
 
+# These three are about the Datasette 0.x pages - CodeMirror 5, the column cog
+# menu, the export links - so they pin ?ref=stable. The 1.0 equivalents are in
+# the "Datasette 1.0 alpha" section below.
+
+
 def test_core_javascript_format_sql(page, static_server):
-    frame = boot(page, static_server + "/?memory=1#/_memory?sql=select+1+as+a,+2+as+b")
+    frame = boot(page, static_server + "/?ref=stable&memory=1#/_memory?sql=select+1+as+a,+2+as+b")
     expect(frame.locator(".CodeMirror")).to_be_visible()
     frame.locator("#sql-format").click()
     value = datasette_frame(page).evaluate("document.querySelector('.CodeMirror').CodeMirror.getValue()")
@@ -51,7 +56,7 @@ def test_core_javascript_format_sql(page, static_server):
 
 
 def test_core_javascript_column_actions_menu(page, static_server):
-    frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")
+    frame = boot(page, static_server + "/?ref=stable&csv=" + F + "items.csv#/data/items")
     # table.js adds a cog menu to each column header
     frame.locator("th.col-qty svg.dropdown-menu-icon").click()
     menu = frame.locator(".dropdown-menu")
@@ -63,7 +68,7 @@ def test_core_javascript_column_actions_menu(page, static_server):
 
 def test_json_export_link(page, static_server):
     "The double-applied base_url bug in export links is worked around"
-    frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")
+    frame = boot(page, static_server + "/?ref=stable&csv=" + F + "items.csv#/data/items")
     link = frame.locator(".export-links a", has_text="json").first
     href = link.get_attribute("href")
     assert href.startswith(iframe_base(page) + "/data/items.json")
@@ -93,9 +98,12 @@ def test_csv_download(page, static_server):
 
 
 def test_plugin_datasette_cluster_map(page, static_server):
+    # ?ref=stable: datasette-cluster-map 0.18.2 asks the JSON API for
+    # _extra=next_url, which Datasette 1.0a42 rejects, so on the default
+    # (alpha) the map loads but stays empty
     frame = boot(
         page,
-        static_server + "/?install=datasette-cluster-map&csv=" + F + "places.csv#/data/places",
+        static_server + "/?ref=stable&install=datasette-cluster-map&csv=" + F + "places.csv#/data/places",
     )
     # The plugin's JavaScript (served from /-/static-plugins/) fetches the
     # table's .json and renders a Leaflet map with a marker cluster
@@ -129,8 +137,12 @@ def test_plugin_datasette_copyable(page, static_server):
 # --- POST requests, CSRF and cookies -------------------------------------------
 
 
-def test_root_sign_in_and_logout(page, static_server):
-    frame = boot(page, static_server + "/?memory=1&root=1")
+BOTH_VERSIONS = pytest.mark.parametrize("ref", ["", "&ref=stable"], ids=["default", "stable"])
+
+
+@BOTH_VERSIONS
+def test_root_sign_in_and_logout(page, static_server, ref):
+    frame = boot(page, static_server + "/?memory=1&root=1" + ref)
     assert actor(page) == {"id": "root"}
     # Log out is a POST form with a CSRF token; the message is a signed cookie
     datasette_frame(page).evaluate("location.href = location.pathname.replace(/\\/$/, '') + '/-/logout'")
@@ -145,9 +157,10 @@ def test_no_actor_by_default(page, static_server):
     assert actor(page) is None
 
 
-def test_core_messages_debug_post(page, static_server):
+@BOTH_VERSIONS
+def test_core_messages_debug_post(page, static_server, ref):
     "/-/messages is a root-only POST form - exercises CSRF + messages cookie"
-    frame = boot(page, static_server + "/?memory=1&root=1#/-/messages")
+    frame = boot(page, static_server + "/?memory=1&root=1" + ref + "#/-/messages")
     frame.locator("input[name=message]").fill("Hello from a POST")
     frame.locator("form input[type=submit]").click()
     expect(frame.locator(".message-info, .message-warning, .message-error").first).to_contain_text(
@@ -248,8 +261,11 @@ def test_plugin_datasette_edit_schema(page, static_server):
     rename.locator("input[name=name]").fill("renamed_items")
     rename.locator("input[type=submit]").click()
     wait_for_hash(page, "renamed_items")
-    tables = fetch_json(page, iframe_base(page) + "/data.json")["json"]["tables"]
-    assert [t["name"] for t in tables] == ["renamed_items"]
+    base = iframe_base(page)
+    renamed = fetch_json(page, base + "/data/renamed_items.json?_shape=array")
+    assert renamed["status"] == 200
+    assert [row["name"] for row in renamed["json"]] == ["Widget", "Gadget", "Sprocket"]
+    assert fetch_json(page, base + "/data/items.json")["status"] == 404
 
 
 # --- Datasette 1.0 alpha ---------------------------------------------------------
@@ -258,7 +274,7 @@ def test_plugin_datasette_edit_schema(page, static_server):
 @pytest.fixture(scope="module")
 def pre_page(shared_context, static_server):
     page = shared_context.new_page()
-    boot(page, static_server + "/?ref=pre&root=1&csv=" + F + "items.csv#/data/items")
+    boot(page, static_server + "/?root=1&csv=" + F + "items.csv#/data/items")
     yield page
     page.close()
 
@@ -333,8 +349,8 @@ def test_two_tabs_are_isolated(browser: Browser, static_server):
     try:
         frame_one = boot(one, static_server + "/?csv=" + F + "items.csv")
         frame_two = boot(two, static_server + "/?url=" + F + "generated/demo.db")
-        expect(frame_one.locator("h2")).to_have_text(["data"])
-        expect(frame_two.locator("h2")).to_have_text(["demo"])
+        assert database_names(one) == ["data"]
+        assert database_names(two) == ["demo"]
         # Navigate both again - each is answered by its own Pyodide
         one.evaluate("location.hash = '#/data/items'")
         two.evaluate("location.hash = '#/demo/dogs'")
