@@ -7,7 +7,7 @@ import re
 from urllib.parse import quote
 
 import pytest
-from playwright.sync_api import Browser, Page, expect
+from playwright.sync_api import Page, expect
 
 from conftest import app_path, boot, datasette_frame, wait_for_boot, wait_for_hash
 
@@ -15,8 +15,8 @@ F = "tests/fixtures/"
 
 
 @pytest.fixture
-def page(browser: Browser):
-    page = browser.new_page()
+def page(shared_context):
+    page = shared_context.new_page()
     yield page
     page.close()
 

@@ -14,8 +14,8 @@ F = "tests/fixtures/"
 
 
 @pytest.fixture
-def page(browser: Browser):
-    page = browser.new_page()
+def page(shared_context):
+    page = shared_context.new_page()
     yield page
     page.close()
 
@@ -256,8 +256,8 @@ def test_plugin_datasette_edit_schema(page, static_server):
 
 
 @pytest.fixture(scope="module")
-def pre_page(browser: Browser, static_server):
-    page = browser.new_page()
+def pre_page(shared_context, static_server):
+    page = shared_context.new_page()
     boot(page, static_server + "/?ref=pre&root=1&csv=" + F + "items.csv#/data/items")
     yield page
     page.close()

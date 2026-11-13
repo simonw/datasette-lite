@@ -4,14 +4,14 @@ These load the default fixtures.db + content.db databases from the network."""
 import json
 
 import pytest
-from playwright.sync_api import Browser, Page, expect
+from playwright.sync_api import Page, expect
 
 from conftest import boot, wait_for_boot
 
 
 @pytest.fixture(scope="module")
-def dslite(static_server, browser: Browser):
-    page = browser.new_page()
+def dslite(static_server, shared_context):
+    page = shared_context.new_page()
     page.goto(static_server + "/")
     expect(page.locator("#loading-indicator")).to_be_visible()
     wait_for_boot(page)
@@ -59,8 +59,8 @@ def test_navigate_to_database(dslite: Page):
     )
 
 
-def test_load_multiple_database_urls(static_server, browser: Browser):
-    page = browser.new_page()
+def test_load_multiple_database_urls(static_server, shared_context):
+    page = shared_context.new_page()
     frame = boot(
         page,
         static_server + "/"
@@ -72,8 +72,8 @@ def test_load_multiple_database_urls(static_server, browser: Browser):
     page.close()
 
 
-def test_ref(static_server, browser: Browser):
-    page = browser.new_page()
+def test_ref(static_server, shared_context):
+    page = shared_context.new_page()
     page.goto(static_server + "/?ref=1.0a11#/-/versions.json")
     expect(page.locator("#loading-indicator")).to_be_visible()
     wait_for_boot(page)

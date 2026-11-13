@@ -109,6 +109,19 @@ def browser_type_launch_args(browser_type_launch_args):
     return args
 
 
+@pytest.fixture(scope="session")
+def shared_context(browser):
+    """One browser context shared by every test that does not need its own.
+
+    A new context starts with an empty HTTP cache, so each boot would download
+    Pyodide and every wheel again. Sharing the context means only the first
+    boot of a run does that. Tests stay isolated where it matters: each page
+    is its own Datasette Lite tab, with its own session, worker and data."""
+    context = browser.new_context()
+    yield context
+    context.close()
+
+
 def wait_for_boot(page: Page):
     "Wait for Datasette Lite to finish booting, fail fast with any startup error"
     page.wait_for_function(
