@@ -35,7 +35,7 @@ The page you are on mirrors the iframe's location into its `#fragment`, so URLs 
 
 Cookies are kept in a cookie jar inside the Python ASGI bridge (service workers cannot read or set cookies), so they last until the tab is closed or reloaded - as does all of the data.
 
-If the tab that owns a session goes away, requests for that session fail with an error rather than hanging: a `503` if the tab has already been closed or reloaded, a `504` if it stops answering part way through a request (after four minutes, to leave room for slow SQL queries) and a `500` if the Pyodide worker itself fails.
+If the tab that owns a session goes away, requests for that session fail with an error rather than hanging: a `503` if the tab has already been closed or reloaded, a `504` if it stops answering part way through a request (after four minutes, to leave room for slow SQL queries) and a `500` if the Pyodide worker itself fails. A tab that was opened before Datasette Lite was updated to an incompatible release gets a `409` asking for a reload.
 
 A browser with service worker support is required. Some private browsing modes (Firefox private windows for example) disable service workers.
 

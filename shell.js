@@ -16,6 +16,11 @@ const SESSION = (
   (self.crypto && crypto.randomUUID && crypto.randomUUID()) ||
   String(Math.random()).slice(2) + String(Date.now())
 ).replace(/-/g, "").slice(0, 12);
+// Version of the messages exchanged with sw.js - see PROTOCOL there. The
+// service worker is replaced as soon as a new release is deployed, while this
+// page keeps running the release it was loaded from, so this page tells the
+// service worker which protocol it speaks. Bump both together.
+const PROTOCOL = 1;
 // Datasette's base_url: every URL Datasette generates starts with this.
 const APP_BASE = SCOPE_PATH + "app/" + SESSION + "/";
 const APP_ROOT = APP_BASE.slice(0, -1);
@@ -156,7 +161,7 @@ function onServiceWorkerMessage(event) {
   const data = event.data || {};
   const port = event.ports[0];
   if (data.type == "datasette-lite-owner") {
-    port.postMessage({owner: data.session === SESSION});
+    port.postMessage({owner: data.session === SESSION, protocol: PROTOCOL});
   } else if (data.type == "datasette-lite-request" && data.session === SESSION) {
     callWorker(data.request).then((response) => {
       port.postMessage(

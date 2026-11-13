@@ -375,6 +375,33 @@ def test_app_url_opened_in_new_tab_redirects_to_shell(browser: Browser, static_s
         context.close()
 
 
+def test_shell_speaking_another_protocol_is_told_to_reload(browser: Browser, static_server):
+    """A deploy swaps the service worker under tabs still running the previous
+    shell.js. If the two no longer speak the same message protocol the tab
+    must be told to reload, not sent requests it may not understand."""
+    context = browser.new_context()
+    try:
+        # Stand in for a tab left over from another release: same service
+        # worker, but a shell.js that announces a different protocol version
+        def other_protocol(route):
+            response = route.fetch()
+            body = response.text()
+            assert "const PROTOCOL = 1;" in body
+            route.fulfill(response=response, body=body.replace("const PROTOCOL = 1;", "const PROTOCOL = 2;"))
+
+        context.route("**/shell.js", other_protocol)
+        page = context.new_page()
+        page.goto(static_server + "/?memory=1")
+        wait_for_boot(page)
+        frame = page.frame_locator("#datasette")
+        expect(frame.locator("body")).to_contain_text("Datasette Lite has been updated")
+        expect(frame.locator("body")).to_contain_text("Reload")
+        status = datasette_frame(page).evaluate("fetch(location.href).then((response) => response.status)")
+        assert status == 409
+    finally:
+        context.close()
+
+
 def test_survives_service_worker_restart(page, static_server):
     frame = boot(page, static_server + "/?memory=1")
     cdp = page.context.new_cdp_session(page)

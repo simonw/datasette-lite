@@ -17,6 +17,15 @@
 const SCOPE_PATH = new URL("./", self.location.href).pathname;
 const APP_PREFIX = SCOPE_PATH + "app/";
 const OWNER_TIMEOUT_MS = 2000;
+// Version of the messages exchanged with shell.js: "datasette-lite-owner",
+// "datasette-lite-request" and their replies. A deploy replaces this service
+// worker straight away (skipWaiting + clients.claim below), including under
+// tabs that are still running the previous shell.js, so the two can disagree.
+// Bump this - here and in shell.js - whenever a message changes in a way the
+// other side would not understand. Adding an optional field does not need it.
+// A shell that does not say which protocol it speaks predates this check, and
+// speaks 1.
+const PROTOCOL = 1;
 // How long to wait for the owning shell to answer a request. Generous, since
 // slow SQL queries are legitimate - but under the 5 minutes after which
 // Chromium kills a service worker whose fetch event has not settled, so that
@@ -96,16 +105,21 @@ async function handleHardcodedPath(event, url) {
   return handleAppRequest(new Request(target.href, event.request), session);
 }
 
-// Ask a single window client whether it owns this session.
+// Ask a single window client whether it owns this session. Resolves to
+// {client, protocol} if it does, null if it does not or never answers.
 function askOwner(client, session) {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    const timer = setTimeout(() => resolve(false), OWNER_TIMEOUT_MS);
+    const timer = setTimeout(() => resolve(null), OWNER_TIMEOUT_MS);
     channel.port1.onmessage = (event) => {
       clearTimeout(timer);
-      resolve(!!(event.data && event.data.owner));
+      const reply = event.data || {};
+      resolve(reply.owner ? {client, protocol: reply.protocol || 1} : null);
     };
-    client.postMessage({type: "datasette-lite-owner", session}, [channel.port2]);
+    client.postMessage(
+      {type: "datasette-lite-owner", session, protocol: PROTOCOL},
+      [channel.port2],
+    );
   });
 }
 
@@ -119,8 +133,8 @@ async function findOwner(session) {
   return new Promise((resolve) => {
     let waiting = shells.length;
     for (const client of shells) {
-      askOwner(client, session).then((isOwner) => {
-        if (isOwner) resolve(client);
+      askOwner(client, session).then((owner) => {
+        if (owner) resolve(owner);
         else if (--waiting === 0) resolve(null);
       });
     }
@@ -143,14 +157,25 @@ async function handleAppRequest(request, session) {
   // with the same startup options when the owning tab is still open.
   if (request.mode === "navigate" && request.destination === "document") {
     if (request.method === "GET") {
-      return shellRedirect(owner ? owner.url : new URL(SCOPE_PATH, self.location.href).href,
-                           request.url, session);
+      return shellRedirect(
+        owner ? owner.client.url : new URL(SCOPE_PATH, self.location.href).href,
+        request.url, session,
+      );
     }
   }
   if (!owner) {
     return new Response(
       "This Datasette Lite session is no longer running - reload the page to start it again.",
       {status: 503, headers: {"content-type": "text/plain; charset=utf-8"}},
+    );
+  }
+  if (owner.protocol !== PROTOCOL) {
+    // The tab was opened before (or, briefly, after) a deploy that changed
+    // the messages. It would not understand the request, so don't send it.
+    return new Response(
+      "Datasette Lite has been updated since this tab was opened. " +
+      "Reload the page to keep using it.",
+      {status: 409, headers: {"content-type": "text/plain; charset=utf-8"}},
     );
   }
 
@@ -166,7 +191,7 @@ async function handleAppRequest(request, session) {
     // killed), in which case no reply ever arrives.
     timer = setTimeout(() => resolve(null), REPLY_TIMEOUT_MS);
   });
-  owner.postMessage(
+  owner.client.postMessage(
     {
       type: "datasette-lite-request",
       session,
