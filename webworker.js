@@ -19,9 +19,18 @@ function log(line) {
   self.postMessage({type: 'log', line: line});
 }
 
+// A file name without its extension, as Python's Path(name).stem - which is
+// how Datasette names a database: "chinook.sqlite" is the database "chinook"
+function stem(fileName) {
+  const dot = fileName.lastIndexOf(".");
+  return dot > 0 && dot < fileName.length - 1 ? fileName.slice(0, dot) : fileName;
+}
+
 function databaseFiles(sqliteUrls) {
+  // Each database is saved as <name>.db, so <name> is what Datasette calls it.
+  // Names must stay stable: they are part of every shared #/name/table link.
   const baseNames = sqliteUrls.map(
-    url => url.split('.db')[0].split('/').slice(-1)[0]
+    url => stem(url.split('.db')[0].split('/').slice(-1)[0])
   );
   const reservedNames = new Set(baseNames);
   const usedNames = new Set();

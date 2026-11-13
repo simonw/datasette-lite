@@ -1,6 +1,7 @@
 import os
 import pathlib
 import re
+import shutil
 import socket
 import sqlite3
 import time
@@ -39,6 +40,9 @@ def generated_fixtures():
         conn.executemany("insert into dogs (name, age) values (?, ?)", rows)
         conn.commit()
         conn.close()
+    # The same database under file names that do not simply end in .db
+    for name in ("extension.sqlite", "dotted.name.db"):
+        shutil.copyfile(generated / "demo.db", generated / name)
     return generated
 
 

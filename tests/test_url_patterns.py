@@ -47,6 +47,21 @@ def test_url_repeated_gets_suffixes(page, static_server):
     expect(frame.locator("h2")).to_have_text(["demo", "other", "demo_2"])
 
 
+def test_url_database_names_drop_the_file_extension(page, static_server):
+    """A database is named after its file without the extension, whatever
+    the extension is - existing #/chinook/Album style links depend on it."""
+    frame = boot(
+        page,
+        static_server
+        + "/?url={F}generated/extension.sqlite&url={F}generated/dotted.name.db"
+        "&url={F}generated/demo.db&url={F}generated/demo.db#/extension/dogs".format(F=F),
+        wait_for="td.col-name",
+    )
+    expect(frame.locator("td.col-name").first).to_have_text("Cleo")
+    page.evaluate("location.hash = '#/'")
+    expect(frame.locator("h2")).to_have_text(["extension", "dotted", "demo", "demo_2"])
+
+
 def test_csv_with_type_detection(page, static_server):
     frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")
     expect(page).to_have_title(re.compile("data: items"))

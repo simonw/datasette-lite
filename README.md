@@ -135,7 +135,7 @@ Copy the URL to the `.db` file and either paste it into the "Load SQLite DB by U
 
     https://lite.datasette.io/?url=https://latest.datasette.io/fixtures.db
 
-Pass `url` more than once to load multiple databases. Each database uses its filename as its name; repeated filenames are suffixed with `_2`, `_3`, and so on:
+Pass `url` more than once to load multiple databases. Each database is named after its file, without the extension - `chinook.sqlite` becomes `chinook` - and repeated names are suffixed with `_2`, `_3`, and so on:
 
     https://lite.datasette.io/?url=https://example.com/data.db&url=https://other.example.com/data.db
 
