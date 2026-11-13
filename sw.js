@@ -55,14 +55,28 @@ self.addEventListener("fetch", (event) => {
 });
 
 async function sessionOfRequester(event) {
+  // clientId is the document making the request. Chromium also sets it for
+  // navigations, to the document that started them (a script assigning
+  // location, a form submission).
   if (event.clientId) {
     const client = await self.clients.get(event.clientId);
     if (client) return sessionFor(client.url);
   }
-  // Navigations have no clientId - use the referring page instead
+  // Firefox and Safari leave clientId empty for navigations - use the
+  // referring page instead.
   if (event.request.referrer) {
     return sessionFor(event.request.referrer);
   }
+  // Known limitation, Firefox and Safari only: Datasette's table, row and
+  // query pages send Referrer-Policy: no-referrer, so a navigation from one of
+  // those to a hardcoded /-/ path arrives with neither a clientId nor a
+  // referrer, falls through to the network and gets a 404. Nothing else on
+  // the event helps: no browser implements replacesClientId, and
+  // resultingClientId is the new document, whose URL is the hardcoded path
+  // itself (checked in the Chromium, Firefox and WebKit builds shipped with
+  // Playwright 1.55). Ordinary links and forms are unaffected - their
+  // attributes are rewritten by datasette_base_url_fixes() in webworker.js -
+  // so this only bites script-driven navigations.
   return null;
 }
 

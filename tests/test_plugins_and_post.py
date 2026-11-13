@@ -482,3 +482,15 @@ def test_cross_origin_iframe_does_not_break_load_handler(page, static_server):
     expect(page.frame_locator("#datasette").locator("#plain")).to_be_visible()
     assert errors == []
     assert app_path(page) == "/"
+
+
+def test_script_navigation_to_hardcoded_path_without_referrer(page, static_server):
+    """Datasette's data pages send Referrer-Policy: no-referrer, so a
+    script-driven navigation to a hardcoded /-/ path has no referrer to
+    recover the session from. Chromium still routes it, because it sets
+    event.clientId for navigations - Firefox and Safari do not, see the
+    comment in sw.js sessionOfRequester()."""
+    frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")
+    datasette_frame(page).evaluate("location.href = '/-/versions'")
+    wait_for_hash(page, "^/-/versions$")
+    expect(frame.locator("body")).to_contain_text("datasette")
