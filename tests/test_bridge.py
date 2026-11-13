@@ -291,3 +291,54 @@ def test_hardcoded_root_relative_attributes(bridge):
         b'<a href="/app/s1/-/ok">ok</a><a href="/other">other</a>'
         b'<p>Text mentioning href="/app/s1/-/not-an-attribute"</p>'
     )
+
+
+def chunked_html_app(chunks):
+    async def app(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/html; charset=utf-8")],
+            }
+        )
+        for i, chunk in enumerate(chunks):
+            await send(
+                {"type": "http.response.body", "body": chunk, "more_body": i < len(chunks) - 1}
+            )
+
+    return app
+
+
+def test_rewrites_apply_across_chunk_boundaries(bridge):
+    # A doubled prefix split across two chunks
+    r = call(
+        bridge,
+        chunked_html_app([b'<a href="/app/s1/ap', b'p/s1/data/items.json">json</a>']),
+        "/app/s1/data/items",
+    )
+    assert r["body"] == b'<a href="/app/s1/data/items.json">json</a>'
+    # A hardcoded /-/ attribute split across three chunks, one of them empty
+    r = call(
+        bridge,
+        chunked_html_app([b'<form action="/', b"", b'-/password-tool">']),
+        "/app/s1/",
+    )
+    assert r["body"] == b'<form action="/app/s1/-/password-tool">'
+
+
+def test_rewritten_body_is_sent_as_one_message(bridge):
+    messages = []
+
+    async def send(message):
+        messages.append(message)
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    app = bridge["datasette_base_url_fixes"](
+        chunked_html_app([b"<p>one", b" two", b" three</p>"]), "/app/s1/"
+    )
+    run(app({"type": "http", "method": "GET", "path": "/app/s1/"}, receive, send))
+    bodies = [m for m in messages if m["type"] == "http.response.body"]
+    assert bodies == [{"type": "http.response.body", "body": b"<p>one two three</p>", "more_body": False}]

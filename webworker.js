@@ -314,7 +314,7 @@ def datasette_base_url_fixes(app, base_url):
         if scope["type"] != "http":
             await app(scope, receive, send)
             return
-        state = {"rewrite": False, "html": False}
+        state = {"rewrite": False, "html": False, "chunks": []}
 
         async def send_wrapper(message):
             if message["type"] == "http.response.start":
@@ -333,7 +333,13 @@ def datasette_base_url_fixes(app, base_url):
                     headers = [(k, v) for k, v in headers if k.lower() != b"content-length"]
                 await send({**message, "headers": headers})
             elif message["type"] == "http.response.body" and state["rewrite"]:
-                body = fix_body(message.get("body", b"") or b"")
+                # Buffer the whole body and rewrite it once, so a pattern
+                # split across two chunks is not missed
+                state["chunks"].append(message.get("body", b"") or b"")
+                if message.get("more_body"):
+                    return
+                body = fix_body(b"".join(state["chunks"]))
+                state["chunks"] = []
                 if state["html"]:
                     body = body.replace(b'"/-/jump"', b'"' + prefix + b'/-/jump"')
                     # Plugins sometimes hardcode root-relative /-/ URLs, e.g.
