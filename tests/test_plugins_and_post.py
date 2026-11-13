@@ -98,12 +98,9 @@ def test_csv_download(page, static_server):
 
 
 def test_plugin_datasette_cluster_map(page, static_server):
-    # ?ref=stable: datasette-cluster-map 0.18.2 asks the JSON API for
-    # _extra=next_url, which Datasette 1.0a42 rejects, so on the default
-    # (alpha) the map loads but stays empty
     frame = boot(
         page,
-        static_server + "/?ref=stable&install=datasette-cluster-map&csv=" + F + "places.csv#/data/places",
+        static_server + "/?install=datasette-cluster-map&csv=" + F + "places.csv#/data/places",
     )
     # The plugin's JavaScript (served from /-/static-plugins/) fetches the
     # table's .json and renders a Leaflet map with a marker cluster
