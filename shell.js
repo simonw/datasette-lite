@@ -220,19 +220,21 @@ window.addEventListener("hashchange", () => {
 let firstLoad = true;
 
 frame.addEventListener("load", () => {
-  let doc;
+  let doc, href, origin, pathname;
   try {
     doc = frame.contentDocument;
+    ({href, origin, pathname} = frame.contentWindow.location);
   } catch (e) {
+    // The iframe is on another origin (a plugin redirected to an OAuth
+    // provider, say) - reading its location throws a SecurityError
     return;
   }
-  const loc = frame.contentWindow.location;
-  if (loc.href === "about:blank") {
+  if (href === "about:blank") {
     return;
   }
-  if (loc.origin === location.origin && !isAppPath(loc.pathname)) {
+  if (origin === location.origin && !isAppPath(pathname)) {
     // Somehow navigated outside Datasette within this site - show it full page
-    location.href = loc.href;
+    location.href = href;
     return;
   }
   const path = frameAppPath();

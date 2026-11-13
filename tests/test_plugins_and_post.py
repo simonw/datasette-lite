@@ -459,3 +459,26 @@ def test_worker_error_fails_pending_requests(page, static_server):
     assert result["status"] == 500
     assert "out of memory" in result["text"]
     assert page.evaluate("pending.size") == 0
+
+
+def test_cross_origin_iframe_does_not_break_load_handler(page, static_server):
+    """If the iframe ends up on another origin (an OAuth redirect, say) the
+    shell's load handler must not throw reading its location."""
+    boot(page, static_server + "/?memory=1")
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    # Same server, different origin: 127.0.0.1 instead of localhost
+    other_origin = static_server.replace("localhost", "127.0.0.1")
+    assert other_origin != static_server
+    page.evaluate(
+        """url => new Promise((resolve) => {
+            const frame = document.getElementById("datasette");
+            // Registered after shell.js's handler, so runs after it
+            frame.addEventListener("load", () => setTimeout(resolve, 0), {once: true});
+            frame.src = url;
+        })""",
+        other_origin + "/" + F + "plain.html",
+    )
+    expect(page.frame_locator("#datasette").locator("#plain")).to_be_visible()
+    assert errors == []
+    assert app_path(page) == "/"
