@@ -67,16 +67,18 @@ async function sessionOfRequester(event) {
   if (event.request.referrer) {
     return sessionFor(event.request.referrer);
   }
-  // Known limitation, Firefox and Safari only: Datasette's table, row and
-  // query pages send Referrer-Policy: no-referrer, so a navigation from one of
-  // those to a hardcoded /-/ path arrives with neither a clientId nor a
-  // referrer, falls through to the network and gets a 404. Nothing else on
-  // the event helps: no browser implements replacesClientId, and
+  // Firefox and Safari only: Datasette's table, row and query pages send
+  // Referrer-Policy: no-referrer, so a navigation from one of those to a
+  // hardcoded /-/ path arrives with neither a clientId nor a referrer. Nothing
+  // else on the event helps: no browser implements replacesClientId, and
   // resultingClientId is the new document, whose URL is the hardcoded path
   // itself (checked in the Chromium, Firefox and WebKit builds shipped with
-  // Playwright 1.55). Ordinary links and forms are unaffected - their
-  // attributes are rewritten by datasette_base_url_fixes() in webworker.js -
-  // so this only bites script-driven navigations.
+  // Playwright 1.55). The request falls through to the network and the iframe
+  // lands on the host's 404 page - where the shell page, which knows its own
+  // session, sends it back into the app (see the load handler in shell.js).
+  // That retry is a GET, so the body of a POST made this way is lost.
+  // Ordinary links and forms never get here: their attributes are rewritten
+  // by datasette_base_url_fixes() in webworker.js.
   return null;
 }
 

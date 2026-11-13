@@ -500,12 +500,64 @@ def test_cross_origin_iframe_does_not_break_load_handler(page, static_server):
     assert app_path(page) == "/"
 
 
+def test_script_inserted_link_to_hardcoded_path(page, static_server):
+    """A link to a hardcoded /-/ path that JavaScript adds to the page is never
+    seen by the server-side attribute rewrite. Clicking it must stay inside
+    this Datasette Lite session, not send the whole page to a 404."""
+    frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")
+    base = iframe_base(page)
+    datasette_frame(page).evaluate(
+        """() => {
+            const a = document.createElement("a");
+            a.id = "scripted-link";
+            a.href = "/-/versions";
+            a.textContent = "Versions";
+            document.body.prepend(a);
+        }"""
+    )
+    frame.locator("#scripted-link").click()
+    wait_for_hash(page, "^/-/versions$")
+    expect(frame.locator("body")).to_contain_text("datasette")
+    # Still the same shell page and the same session, data intact
+    assert "csv=" in page.url
+    assert iframe_base(page) == base
+    assert fetch_json(page, base + "/data/items.json?_shape=array")["status"] == 200
+
+
+def test_iframe_stranded_on_hardcoded_path_is_brought_back(page, static_server):
+    """If the iframe ends up on a hardcoded /-/ path that the service worker
+    could not route - what Firefox and Safari do for a script navigation from
+    a no-referrer page - the shell sends it back into its own session rather
+    than replacing the whole page with the host's 404."""
+    frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")
+    base = iframe_base(page)
+    # Chromium normally tells the service worker which document started a
+    # navigation. Going via about:blank hides that, which reproduces the
+    # stranded iframe here.
+    page.evaluate(
+        """() => new Promise((resolve) => {
+            const frame = document.getElementById("datasette");
+            frame.addEventListener("load", () => {
+                frame.src = "/-/versions?x=1";
+                resolve();
+            }, {once: true});
+            frame.src = "about:blank";
+        })"""
+    )
+    wait_for_hash(page, r"^/-/versions\?x=1$")
+    expect(frame.locator("body")).to_contain_text("datasette")
+    assert "csv=" in page.url
+    assert iframe_base(page) == base
+    assert fetch_json(page, base + "/data/items.json?_shape=array")["status"] == 200
+
+
 def test_script_navigation_to_hardcoded_path_without_referrer(page, static_server):
     """Datasette's data pages send Referrer-Policy: no-referrer, so a
     script-driven navigation to a hardcoded /-/ path has no referrer to
     recover the session from. Chromium still routes it, because it sets
-    event.clientId for navigations - Firefox and Safari do not, see the
-    comment in sw.js sessionOfRequester()."""
+    event.clientId for navigations. Firefox and Safari do not - there the
+    shell page recovers it instead, which is what
+    test_iframe_stranded_on_hardcoded_path_is_brought_back covers."""
     frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")
     datasette_frame(page).evaluate("location.href = '/-/versions'")
     wait_for_hash(page, "^/-/versions$")

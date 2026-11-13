@@ -188,6 +188,15 @@ function isAppPath(pathname) {
   return pathname === APP_ROOT || pathname.startsWith(APP_BASE);
 }
 
+// Datasette and plugins sometimes hardcode root-relative "/-/..." URLs that
+// ignore base_url. This is where such a URL belongs inside this session.
+function appUrlForHardcodedPath(url) {
+  if (url.origin !== location.origin || !url.pathname.startsWith("/-/")) {
+    return null;
+  }
+  return APP_ROOT + url.pathname + url.search + url.hash;
+}
+
 function frameAppPath() {
   try {
     const loc = frame.contentWindow.location;
@@ -233,6 +242,15 @@ frame.addEventListener("load", () => {
     return;
   }
   if (origin === location.origin && !isAppPath(pathname)) {
+    const appUrl = appUrlForHardcodedPath(new URL(href));
+    if (appUrl) {
+      // A navigation to a hardcoded /-/ path that the service worker could
+      // not route to a session (see sessionOfRequester() in sw.js), so the
+      // iframe is showing the host's 404. This page knows its own session:
+      // send the iframe back there. replace() drops the 404 from history.
+      frame.contentWindow.location.replace(appUrl);
+      return;
+    }
     // Somehow navigated outside Datasette within this site - show it full page
     location.href = href;
     return;
@@ -287,7 +305,15 @@ function enhanceDocument(doc) {
       window.open(url.href, "_blank", "noopener");
     } else if (!isAppPath(url.pathname)) {
       ev.preventDefault();
-      location.href = url.href;
+      const appUrl = appUrlForHardcodedPath(url);
+      if (appUrl) {
+        // A hardcoded /-/ link, e.g. one added by a plugin's JavaScript so
+        // the server-side attribute rewrite never saw it
+        frame.contentWindow.location.href = appUrl;
+      } else {
+        // A link to another Datasette Lite URL - replace the whole page
+        location.href = url.href;
+      }
     }
   });
   addLoadButtons(doc);
