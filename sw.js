@@ -17,6 +17,11 @@
 const SCOPE_PATH = new URL("./", self.location.href).pathname;
 const APP_PREFIX = SCOPE_PATH + "app/";
 const OWNER_TIMEOUT_MS = 2000;
+// How long to wait for the owning shell to answer a request. Generous, since
+// slow SQL queries are legitimate - but under the 5 minutes after which
+// Chromium kills a service worker whose fetch event has not settled, so that
+// the page gets the 504 below rather than a network error.
+const REPLY_TIMEOUT_MS = 4 * 60 * 1000;
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -138,8 +143,12 @@ async function handleAppRequest(request, session) {
   const headers = [...request.headers.entries()];
 
   const channel = new MessageChannel();
+  let timer;
   const reply = new Promise((resolve) => {
     channel.port1.onmessage = (event) => resolve(event.data);
+    // The owner can vanish mid-request (tab closed or reloaded, worker
+    // killed), in which case no reply ever arrives.
+    timer = setTimeout(() => resolve(null), REPLY_TIMEOUT_MS);
   });
   owner.postMessage(
     {
@@ -150,6 +159,15 @@ async function handleAppRequest(request, session) {
     body ? [channel.port2, body] : [channel.port2],
   );
   const msg = await reply;
+  clearTimeout(timer);
+  channel.port1.close();
+  if (!msg) {
+    return new Response(
+      "Datasette Lite did not answer this request in time - " +
+      "the tab running it may have been closed or reloaded.",
+      {status: 504, headers: {"content-type": "text/plain; charset=utf-8"}},
+    );
+  }
 
   const responseHeaders = new Headers();
   for (const [name, value] of msg.headers) {

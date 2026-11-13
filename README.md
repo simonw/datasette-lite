@@ -35,6 +35,8 @@ The page you are on mirrors the iframe's location into its `#fragment`, so URLs 
 
 Cookies are kept in a cookie jar inside the Python ASGI bridge (service workers cannot read or set cookies), so they last until the tab is closed or reloaded - as does all of the data.
 
+If the tab that owns a session goes away, requests for that session fail with an error rather than hanging: a `503` if the tab has already been closed or reloaded, a `504` if it stops answering part way through a request (after four minutes, to leave room for slow SQL queries) and a `500` if the Pyodide worker itself fails.
+
 A browser with service worker support is required. Some private browsing modes (Firefox private windows for example) disable service workers.
 
 ## Load a different Datasette version
@@ -271,6 +273,6 @@ uv run --python 3.12 \
 - `tests/test_bridge.py` - fast pure-Python tests of the ASGI bridge, cookie jar and `base_url` workarounds, extracted from `webworker.js`. Install `datasette` to also run them against a real Datasette.
 - `tests/test_datasette_lite.py` - the original browser tests, loading the default databases.
 - `tests/test_url_patterns.py` - every supported `?` option and `#` URL pattern, using the small files in `tests/fixtures/`.
-- `tests/test_plugins_and_post.py` - JavaScript (core and plugins), POST forms, CSRF, sign-in, uploads, downloads, the 1.0 alpha write API, multiple tabs, other pages open on the same origin and service worker restarts.
+- `tests/test_plugins_and_post.py` - JavaScript (core and plugins), POST forms, CSRF, sign-in, uploads, downloads, the 1.0 alpha write API, multiple tabs, other pages open on the same origin, worker failures and service worker restarts.
 
 Tests that download from third-party hosts beyond Pyodide, PyPI and the default databases are marked `network`; skip them with `-m "not network"`. To use an existing Chromium binary set `CHROMIUM_EXECUTABLE=/path/to/chrome`. If the browser needs an HTTPS proxy set `DATASETTE_LITE_TEST_PROXY` (or `HTTPS_PROXY`).

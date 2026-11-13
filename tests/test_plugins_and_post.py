@@ -429,3 +429,33 @@ def test_silent_same_origin_window_does_not_stall_requests(browser: Browser, sta
         assert time.monotonic() - start < 1.5
     finally:
         context.close()
+
+
+def test_worker_error_fails_pending_requests(page, static_server):
+    "If the Pyodide worker dies, requests waiting on it get a 500, not a hang"
+    boot(page, static_server + "/?memory=1")
+    base = iframe_base(page)
+    # Kill the worker, so the next request is never answered...
+    page.evaluate("datasetteWorker.terminate()")
+    datasette_frame(page).evaluate(
+        """url => {
+            window.pendingFetch = fetch(url).then(
+                async (response) => ({status: response.status, text: await response.text()})
+            );
+        }""",
+        base + "/-/versions.json",
+    )
+    # ...give that request time to reach the shell page...
+    page.wait_for_function("pending.size == 1", timeout=10 * 1000)
+    # ...then report the death the way the browser would
+    page.evaluate("datasetteWorker.dispatchEvent(new ErrorEvent('error', {message: 'out of memory'}))")
+    result = datasette_frame(page).evaluate(
+        """() => Promise.race([
+            window.pendingFetch,
+            new Promise((resolve) => setTimeout(() => resolve("timed out"), 5000)),
+        ])"""
+    )
+    assert result != "timed out"
+    assert result["status"] == 500
+    assert "out of memory" in result["text"]
+    assert page.evaluate("pending.size") == 0

@@ -105,6 +105,29 @@ const workerReady = new Promise((resolve, reject) => {
     }
   };
 });
+
+// If the worker dies (out of memory, say) nothing will ever answer the
+// requests waiting on it, so fail them rather than leave them hanging.
+function failPending(reason) {
+  const message = "Datasette Lite error: " + reason;
+  for (const resolveResponse of pending.values()) {
+    resolveResponse({
+      status: 500,
+      headers: [["content-type", "text/plain; charset=utf-8"]],
+      // An ArrayBuffer like any other response body - one per request, since
+      // it is transferred to the service worker
+      body: new TextEncoder().encode(message).buffer,
+    });
+  }
+  pending.clear();
+}
+datasetteWorker.onerror = (event) => {
+  failPending("the Datasette worker failed: " + ((event && event.message) || "unknown error"));
+};
+datasetteWorker.onmessageerror = () => {
+  failPending("a message from the Datasette worker could not be read");
+};
+
 datasetteWorker.postMessage(startup);
 
 function callWorker(request) {
