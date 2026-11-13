@@ -92,9 +92,18 @@ async function findOwner(session) {
   const windows = await self.clients.matchAll({type: "window", includeUncontrolled: true});
   const shells = windows.filter((client) => !isAppPath(new URL(client.url).pathname));
   if (!shells.length) return null;
-  const answers = await Promise.all(shells.map((client) => askOwner(client, session)));
-  const index = answers.indexOf(true);
-  return index === -1 ? null : shells[index];
+  // Resolve as soon as any window claims the session. Windows that never
+  // answer - a tab running an older Datasette Lite, some other page on this
+  // origin - only cost the timeout when nobody owns the session.
+  return new Promise((resolve) => {
+    let waiting = shells.length;
+    for (const client of shells) {
+      askOwner(client, session).then((isOwner) => {
+        if (isOwner) resolve(client);
+        else if (--waiting === 0) resolve(null);
+      });
+    }
+  });
 }
 
 function shellRedirect(shellUrl, requestUrl, session) {

@@ -271,6 +271,6 @@ uv run --python 3.12 \
 - `tests/test_bridge.py` - fast pure-Python tests of the ASGI bridge, cookie jar and `base_url` workarounds, extracted from `webworker.js`. Install `datasette` to also run them against a real Datasette.
 - `tests/test_datasette_lite.py` - the original browser tests, loading the default databases.
 - `tests/test_url_patterns.py` - every supported `?` option and `#` URL pattern, using the small files in `tests/fixtures/`.
-- `tests/test_plugins_and_post.py` - JavaScript (core and plugins), POST forms, CSRF, sign-in, uploads, downloads, the 1.0 alpha write API, multiple tabs and service worker restarts.
+- `tests/test_plugins_and_post.py` - JavaScript (core and plugins), POST forms, CSRF, sign-in, uploads, downloads, the 1.0 alpha write API, multiple tabs, other pages open on the same origin and service worker restarts.
 
 Tests that download from third-party hosts beyond Pyodide, PyPI and the default databases are marked `network`; skip them with `-m "not network"`. To use an existing Chromium binary set `CHROMIUM_EXECUTABLE=/path/to/chrome`. If the browser needs an HTTPS proxy set `DATASETTE_LITE_TEST_PROXY` (or `HTTPS_PROXY`).

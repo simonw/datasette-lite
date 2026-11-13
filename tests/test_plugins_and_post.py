@@ -3,6 +3,7 @@ running page JavaScript (core and plugins), POST requests, cookies (CSRF
 tokens, sign-in, flash messages), file uploads and downloads."""
 import json
 import re
+import time
 
 import pytest
 from playwright.sync_api import Browser, Page, expect
@@ -399,3 +400,32 @@ def test_served_from_subpath(page, subpath_server):
     # And regular navigation
     page.evaluate("location.hash = '#/data/items'")
     expect(frame.locator("td.col-name").first).to_have_text("Widget")
+
+
+def test_silent_same_origin_window_does_not_stall_requests(browser: Browser, static_server):
+    """A same-origin window that never answers the service worker's "do you
+    own this session?" question must not hold up requests for the timeout."""
+    context = browser.new_context()
+    try:
+        page = context.new_page()
+        frame = boot(page, static_server + "/?memory=1")
+        silent = context.new_page()
+        silent.goto(static_server + "/" + F + "plain.html")
+        expect(silent.locator("#plain")).to_be_visible()
+        # A single request...
+        elapsed_ms = datasette_frame(page).evaluate(
+            """async (url) => {
+                const start = performance.now();
+                await (await fetch(url)).json();
+                return performance.now() - start;
+            }""",
+            iframe_base(page) + "/-/versions.json",
+        )
+        assert elapsed_ms < 1000, elapsed_ms
+        # ...and a full iframe navigation
+        start = time.monotonic()
+        page.evaluate("location.hash = '#/_memory?sql=select+42+as+answer'")
+        expect(frame.locator("td.col-answer")).to_have_text("42")
+        assert time.monotonic() - start < 1.5
+    finally:
+        context.close()
