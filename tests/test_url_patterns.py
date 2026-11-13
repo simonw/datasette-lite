@@ -249,6 +249,10 @@ def test_load_buttons(page, static_server):
     expect(buttons).to_have_text(
         ["Load SQLite DB by URL", "Load CSV", "Load JSON", "Load Parquet", "Load SQL"]
     )
+    # Styled like Datasette's own buttons, not left as browser defaults
+    expect(buttons.first).to_have_css("border-radius", "5px")
+    expect(buttons.first).to_have_css("background-color", "rgb(255, 255, 255)")
+    expect(buttons.first).to_have_css("color", "rgb(36, 70, 93)")
     csv_url = static_server + "/" + F + "items.csv"
     page.once("dialog", lambda dialog: dialog.accept(csv_url))
     frame.locator("#load-custom button.csv-url").click()

@@ -334,14 +334,59 @@ const fileTypes = [
   {id: "sql-url", label: "Load SQL", prompt: "Enter a full URL to a SQL file", param: "sql"},
 ];
 
+// Styled after Datasette 1.0's "quiet buttons" (Export data, View and edit
+// SQL). Self-contained and scoped to #load-custom, so the buttons look the same
+// whichever Datasette version is running and whatever its CSS does to buttons.
+const LOAD_BUTTONS_CSS = `
+#load-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 1rem;
+}
+#load-custom button {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 1.75rem;
+  margin: 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #d8e6f5;
+  border-radius: 5px;
+  background: #fff;
+  color: #24465d;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.2;
+  cursor: pointer;
+}
+#load-custom button:hover,
+#load-custom button:focus-visible {
+  border-color: #1a56db;
+  background: #e8effd;
+  color: #1949b8;
+}
+#load-custom button:focus-visible {
+  outline: 2px solid #1a56db;
+  outline-offset: 2px;
+}
+#load-custom a {
+  font-size: 0.875rem;
+}
+`;
+
 function addLoadButtons(doc) {
   if (doc.getElementById("load-custom")) {
     return;
   }
   const form = doc.createElement("form");
   form.id = "load-custom";
-  const p = doc.createElement("p");
-  p.style.padding = "1em";
+  const style = doc.createElement("style");
+  style.textContent = LOAD_BUTTONS_CSS;
+  form.appendChild(style);
   for (const fileType of fileTypes) {
     const button = doc.createElement("button");
     button.type = "button";
@@ -361,15 +406,13 @@ function addLoadButtons(doc) {
         window.alert(`That ${fileType.param.toUpperCase()} could not be loaded`);
       }
     });
-    p.appendChild(button);
-    p.appendChild(doc.createTextNode(" "));
+    form.appendChild(button);
   }
   const docs = doc.createElement("a");
   docs.href = "https://github.com/simonw/datasette-lite";
   docs.textContent = "Documentation";
-  docs.style.cssText = "text-decoration: none; padding-left: 0.3em; color: #067EFF";
-  p.appendChild(docs);
-  form.appendChild(p);
+  // No colour of its own: it takes Datasette's link colours
+  form.appendChild(docs);
   doc.body.appendChild(form);
 }
 
