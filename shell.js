@@ -89,7 +89,9 @@ const datasetteWorker = new Worker("webworker.js");
 const pending = new Map();
 let nextId = 1;
 
+let failWorkerStartup;
 const workerReady = new Promise((resolve, reject) => {
+  failWorkerStartup = reject;
   datasetteWorker.onmessage = (event) => {
     const data = event.data;
     if (data.type == "log") {
@@ -122,7 +124,14 @@ function failPending(reason) {
   pending.clear();
 }
 datasetteWorker.onerror = (event) => {
-  failPending("the Datasette worker failed: " + ((event && event.message) || "unknown error"));
+  // The event has no message when the worker script itself could not be loaded
+  const reason =
+    (event && event.message) || "the worker script webworker.js could not be loaded or run";
+  // While Datasette is still starting nothing is pending: this is a startup
+  // failure - Pyodide could not be downloaded, say - so show it instead of
+  // leaving the page on "Loading...". A no-op once the worker is ready.
+  failWorkerStartup(new Error("The Datasette worker failed to start: " + reason));
+  failPending("the Datasette worker failed: " + reason);
 };
 datasetteWorker.onmessageerror = () => {
   failPending("a message from the Datasette worker could not be read");

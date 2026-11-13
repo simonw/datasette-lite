@@ -253,6 +253,31 @@ def test_external_links_open_in_new_window(page, static_server):
     assert app_path(page) == "/"
 
 
+@pytest.mark.parametrize(
+    "blocked,expected",
+    (
+        # Pyodide cannot be downloaded: a blocked CDN, or no network
+        ("**/pyodide.js", "pyodide.js"),
+        # The worker script itself is missing
+        ("**/webworker.js", "webworker.js"),
+    ),
+)
+def test_worker_that_fails_to_start_shows_an_error(browser, static_server, blocked, expected):
+    "A worker that dies before it starts must not leave the page on Loading..."
+    # Its own context: the route must also apply to requests made by the worker
+    context = browser.new_context()
+    try:
+        context.route(blocked, lambda route: route.abort())
+        page = context.new_page()
+        page.goto(static_server + "/?memory=1")
+        output = page.locator("#output")
+        expect(output).to_contain_text("Error", timeout=30 * 1000)
+        expect(output).to_contain_text(expected)
+        expect(page.locator("#loading-indicator")).to_be_hidden()
+    finally:
+        context.close()
+
+
 def test_load_buttons(page, static_server):
     frame = boot(page, static_server + "/?memory=1")
     buttons = frame.locator("#load-custom button")
