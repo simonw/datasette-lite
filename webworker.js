@@ -407,6 +407,8 @@ for name, url in to_load:
     names.append(name)
 
 import micropip
+# Pyodide bundles idna 3.7, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
+await micropip.install("idna>=3.18")
 await micropip.install("python-multipart==0.0.15")
 # To avoid possible 'from typing_extensions import deprecated' error:
 await micropip.install('typing-extensions>=4.12.2')
@@ -414,9 +416,8 @@ try:
     await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
 except ValueError:
     # Older Datasette releases: workaround for "Requested 'h11<0.13,>=0.11',
-    # but h11==0.13.0 is already installed". Not used by default because
-    # httpx==0.23 pulls in Pyodide's bundled idna 3.7, which conflicts with
-    # recent 1.0 alphas (they need idna>=3.18)
+    # but h11==0.13.0 is already installed". Only used as a fallback, as
+    # recent releases don't need these pins
     await micropip.install("h11==0.12.0")
     await micropip.install("httpx==0.23")
     await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
