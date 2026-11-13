@@ -280,7 +280,9 @@ function enhanceDocument(doc) {
     }
     if (url.origin !== location.origin) {
       ev.preventDefault();
-      window.open(url.href);
+      // noopener: link targets come from arbitrary data, so don't hand the
+      // opened site a window.opener reference to this page
+      window.open(url.href, "_blank", "noopener");
     } else if (!isAppPath(url.pathname)) {
       ev.preventDefault();
       location.href = url.href;

@@ -221,6 +221,8 @@ def test_external_links_open_in_new_window(page, static_server):
         frame.locator("footer a", has_text="Datasette Lite").click()
     popup = popup_info.value
     popup.wait_for_url("https://github.com/simonw/datasette-lite**")
+    # Opened with noopener: the external site gets no handle on this page
+    assert popup.evaluate("window.opener === null")
     popup.close()
     # The Datasette Lite page itself did not navigate away
     assert app_path(page) == "/"

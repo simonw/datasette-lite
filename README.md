@@ -31,7 +31,7 @@ Datasette's pages are displayed in a full-window `<iframe>` pointing at URLs und
   sw.js (service worker): finds the tab that owns <session>, asks it to relay
 ```
 
-The page you are on mirrors the iframe's location into its `#fragment`, so URLs like `https://lite.datasette.io/?url=...#/fixtures/facetable?_facet=state` can be bookmarked and shared, and the back button works. Each tab gets its own random `<session>` so multiple Datasette Lite tabs with different data can be open at once.
+The page you are on mirrors the iframe's location into its `#fragment`, so URLs like `https://lite.datasette.io/?url=...#/fixtures/facetable?_facet=state` can be bookmarked and shared, and the back button works. Links to other sites open in a new window, with `noopener` so the linked site gets no reference back to the Datasette Lite page. Each tab gets its own random `<session>` so multiple Datasette Lite tabs with different data can be open at once.
 
 Cookies are kept in a cookie jar inside the Python ASGI bridge (service workers cannot read or set cookies), so they last until the tab is closed or reloaded - as does all of the data.
 
