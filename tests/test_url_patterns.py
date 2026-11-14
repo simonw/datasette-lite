@@ -358,14 +358,68 @@ def test_loading_screen_fits_a_phone(browser, static_server):
         # Without a viewport <meta> a phone lays the page out 980px wide
         assert page.evaluate("window.innerWidth") == 375
         page.evaluate(
-            "log('Downloading https://example.com/' + 'long-file-name-'.repeat(30) + '.db')"
+            "showStep({id: 'long', bytes: 123456789, label:"
+            " 'Downloading https://example.com/' + 'long-file-name-'.repeat(30) + '.db'})"
         )
         steps = page.locator("#loading-logs li")
         expect(steps).to_have_count(2)
         expect(steps.last).to_be_visible()
+        # How much has been downloaded stays on one line, beside the URL
+        expect(steps.last.locator(".step-detail")).to_have_text("123.5 MB")
+        expect(steps.last.locator(".step-detail")).to_be_in_viewport(ratio=1)
         assert page.evaluate(
             "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
         ), "the loading screen scrolls sideways"
+    finally:
+        context.close()
+
+
+def test_downloads_do_not_wait_for_python(browser, static_server):
+    "Files download while Pyodide loads, each as a step of its own"
+    # Its own context: one where pyodide.mjs never arrives, so Python never
+    # starts and the page stays on the loading screen
+    context = browser.new_context()
+    try:
+        context.route("**/pyodide.mjs", lambda route: None)
+        page = context.new_page()
+        db_url = static_server + "/" + F + "generated/demo.db"
+        csv_url = static_server + "/" + F + "items.csv"
+        page.goto(static_server + "/?url=" + db_url + "&csv=" + csv_url)
+        steps = page.locator("#loading-logs li")
+        for url in (db_url, csv_url):
+            download = steps.filter(has_text="Downloading " + url)
+            # Finished, and saying how much was downloaded
+            expect(download).to_have_class("done")
+            expect(download.locator(".step-detail")).to_contain_text(re.compile(r"^\d+ k?B"))
+        # ... while Python is still on its way, with nothing else started
+        expect(steps.first.locator(".step-label")).to_have_text("Loading Python (Pyodide)")
+        expect(steps.first).not_to_have_class("done")
+        expect(steps).to_have_count(3)
+    finally:
+        context.close()
+
+
+def test_step_reports_progress_then_finishes(browser, static_server):
+    "A step can be renamed and report bytes while in progress, then finish"
+    context = browser.new_context()
+    try:
+        context.route("**/pyodide.mjs", lambda route: None)
+        page = context.new_page()
+        page.goto(static_server + "/?memory=1")
+        step = page.locator("#loading-logs li").nth(1)
+        page.evaluate("showStep({id: 'x', label: 'Installing Datasette'})")
+        expect(step.locator(".step-label")).to_have_text("Installing Datasette")
+        expect(step).not_to_have_class("done")
+        page.evaluate("showStep({id: 'x', label: 'Installing Datasette 1.0', bytes: 2048})")
+        expect(step.locator(".step-label")).to_have_text("Installing Datasette 1.0")
+        expect(step.locator(".step-detail")).to_contain_text("2 kB")
+        # The time taken so far is shown once it is worth showing
+        expect(step.locator(".step-detail")).to_contain_text(re.compile(r"\d s$"))
+        page.evaluate("showStep({id: 'x', done: true})")
+        expect(step).to_have_class("done")
+        expect(step.locator(".step-detail")).to_contain_text(re.compile(r"\d\.\d s$"))
+        # Still one step, not three
+        expect(page.locator("#loading-logs li")).to_have_count(2)
     finally:
         context.close()
 
@@ -395,7 +449,10 @@ def test_load_buttons_on_loading_screen(browser, static_server):
         assert page.evaluate(footer_bottom) == 700
         # A page longer than the window scrolls behind the buttons, which stay
         # where they are and do not cover the end of it
-        page.evaluate("for (let i = 0; i < 40; i++) { log('Installing package-' + i) }")
+        page.evaluate(
+            "for (let i = 0; i < 40; i++) {"
+            " showStep({id: 'package-' + i, label: 'Installing package-' + i}) }"
+        )
         page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
         assert page.evaluate("window.scrollY") > 0
         assert page.evaluate(footer_bottom) == 700

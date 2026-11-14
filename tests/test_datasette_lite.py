@@ -2,6 +2,7 @@
 
 These load the default fixtures.db + content.db databases from the network."""
 import json
+import re
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -27,17 +28,27 @@ def test_initial_load(dslite: Page):
 
 
 def test_loading_screen_listed_the_startup_steps(dslite: Page):
-    steps = dslite.locator("#loading-logs li").all_text_contents()
-    assert steps[0] == "Loading Python (Pyodide)..."
-    assert steps[-1] == "Starting Datasette..."
-    for step in (
+    steps = dslite.locator("#loading-logs li .step-label").all_text_contents()
+    assert steps[0] == "Loading Python (Pyodide)"
+    assert steps[-1] == "Starting Datasette"
+    downloads = [
         "Downloading https://latest.datasette.io/fixtures.db",
         "Downloading https://datasette.io/content.db",
-        "Installing Datasette...",
-    ):
+    ]
+    for step in downloads + ["Loading micropip and setuptools"]:
         assert step in steps
+    # Named once it is known which version that is
+    assert [step for step in steps if re.fullmatch(r"Installing Datasette \d\S*", step)]
     # Pyodide's "Loaded x" and "No new packages to load" lines are not steps
     assert not [step for step in steps if not step.startswith(("Loading", "Downloading", "Installing", "Starting"))]
+    # The downloads started before Python had loaded, not after
+    for step in downloads:
+        assert steps.index(step) < steps.index("Loading micropip and setuptools")
+    # Every step finished: none was left showing a spinner
+    expect(dslite.locator("#loading-logs li:not(.done)")).to_have_count(0)
+    # A download says how much was downloaded
+    fixtures = dslite.locator("#loading-logs li", has_text="fixtures.db")
+    assert re.match(r"\d+ kB", fixtures.locator(".step-detail").text_content())
 
 
 def test_has_two_databases(dslite: Page):
