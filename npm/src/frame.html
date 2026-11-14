@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Datasette</title>
+<style>
+html, body { margin: 0; height: 100%; }
+datasette-lite { height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<!--
+  Embedded by a <datasette-lite> element on another site when this package is
+  loaded from a CDN. This page is on the CDN's origin, so it can register the
+  service worker next to it; the embedding page sends it options and data, and
+  calls it, over a MessagePort.
+-->
+<script type="module">
+import "./datasette-lite.js";
+
+let element = null;
+
+const methods = {
+  query: async (sql, options) => [await element.query(sql, options)],
+  async fetch(path, init) {
+    const response = await element.fetch(path, init);
+    const body = await response.arrayBuffer();
+    return [{ status: response.status, headers: [...response.headers.entries()], body }, [body]];
+  },
+  add: async (item) => [await element.datasette.add(item)],
+  addFile: async (file, options) => [await element.addFile(new File([file.data], file.name), options)],
+  async readDatabase(name) {
+    const bytes = await element.readDatabase(name);
+    return [bytes.buffer, [bytes.buffer]];
+  },
+  navigate: async (path, options) => [element.navigate(path, options)],
+};
+
+window.addEventListener("message", (event) => {
+  const data = event.data || {};
+  if (element || event.source !== parent || data.type != "datasette-lite-frame-start") return;
+  const port = event.ports[0];
+  const { path, drop, ...options } = data.options;
+  element = document.createElement("datasette-lite");
+  element.options = options;
+  if (path) element.setAttribute("path", path);
+  if (drop) element.setAttribute("drop", "");
+  for (const name of ["log", "navigate", "ready", "error"]) {
+    element.addEventListener("datasette-" + name, (e) => {
+      port.postMessage({ event: name, detail: name == "error" ? e.detail.message : e.detail });
+    });
+  }
+  port.onmessage = async (message) => {
+    const { id, method, args } = message.data;
+    try {
+      const [result, transfer] = await methods[method](...args);
+      port.postMessage({ id, result }, transfer || []);
+    } catch (error) {
+      port.postMessage({ id, error: (error && error.message) || String(error) });
+    }
+  };
+  document.body.append(element);
+});
+
+if (parent !== window) {
+  parent.postMessage({ type: "datasette-lite-frame-hello" }, "*");
+}
+</script>
+</body>
+</html>

@@ -20,7 +20,7 @@ What is here:
 ```bash
 cd npm
 npm install
-npm run build        # needs the network, once: about 12 seconds
+npm run build        # needs the network, once: about 30 seconds
 npm run demo         # http://127.0.0.1:8001/ - Datasette in a browser tab
 node bin/datasette-lite.js serve dist/demo.db --root   # Datasette served by Node
 npm test             # needs Playwright and its Chromium to be resolvable
@@ -30,11 +30,107 @@ The build output:
 
 ```
 Datasette 1.0a42 on Python 3.12.7 (Pyodide 0.27.2)
-40 packages, 18.6 MB - 21 wheels from PyPI, 19 from Pyodide
-dist/ is 31.8 MB - offline self-test passed
+33 packages in site-packages.tar.xz: 3.9 MB
+3 wheels loaded on demand: 0.6 MB (packaging, micropip, lzma)
+dist/ is 17.7 MB - offline self-test passed
 ```
 
-`npm pack` turns that into a **13.9 MB tarball with no dependencies**.
+`npm pack` turns that into a **10.1 MB tarball with no dependencies**.
+
+## From a CDN
+
+Once published, nothing has to be installed or copied. There are three ways
+to use it from jsDelivr or unpkg, and which one applies is decided by what a
+browser allows: a service worker can only be registered by a page on the
+service worker's own origin.
+
+**1. Queries, no UI - any CDN, nothing on your site.**
+
+```html
+<script type="module">
+import { DatasetteLite } from "https://cdn.jsdelivr.net/npm/datasette-lite/dist/datasette-lite.js";
+const datasette = await DatasetteLite.start({ databases: ["/data/trees.db"] });
+console.log(await datasette.query("select count(*) from trees"));
+</script>
+```
+
+**2. The full UI - unpkg, nothing on your site.**
+
+```html
+<script type="module" src="https://unpkg.com/datasette-lite/dist/datasette-lite.js"></script>
+<datasette-lite src="/data/trees.db"></datasette-lite>
+```
+
+The element sees that the package is on another origin and embeds the
+package's own `frame.html`. That page *is* on the CDN's origin, so it can
+register the CDN's copy of the service worker, and the element talks to it
+with `postMessage`. Your data files are read by your page and handed over as
+bytes, so they need no CORS headers. `element.mode` is `"frame"`.
+
+This needs a CDN that serves `.html` files as HTML. unpkg does. jsDelivr
+serves them as `text/plain` and esm.sh sandboxes them, so there the element
+reports an error that says to use option 3.
+
+**3. The full UI - any CDN, one line on your site.**
+
+```js
+// /datasette-lite-sw.js
+importScripts("https://cdn.jsdelivr.net/npm/datasette-lite@0.1.0/dist/sw.js");
+```
+
+```html
+<script type="module" src="https://cdn.jsdelivr.net/npm/datasette-lite@0.1.0/dist/datasette-lite.js"></script>
+<datasette-lite src="/data/trees.db" service-worker="/datasette-lite-sw.js"></datasette-lite>
+```
+
+Datasette's pages are then on your own origin (under the directory that file
+is in), with everything heavy still coming from the CDN. This is the same as
+self-hosting in every way that matters: `autoheight` works, and there is no
+third-party frame for a browser's privacy settings to object to.
+
+A URL without a version is pinned by the module itself: loaded from
+`.../npm/datasette-lite/dist/`, it fetches everything else from
+`.../npm/datasette-lite@<its own version>/dist/`, so the worker, the lock
+file and the packages can never come from a newer release than the code.
+
+### Page weight
+
+What a browser downloads to get from nothing to a rendered table, measured
+from the request log of a real page load (13 requests):
+
+| | raw | jsDelivr | unpkg |
+| --- | --- | --- | --- |
+| `pyodide.asm.wasm` (CPython) | 10.10 | 2.27 | 3.14 |
+| `site-packages.tar.xz` (Datasette + 32 packages) | 4.10 | 4.10 | 4.10 |
+| `python_stdlib.zip` | 2.36 | 2.36 | 2.36 |
+| `pyodide.asm.js` | 1.25 | 0.20 | 0.24 |
+| `lzma` wheel | 0.22 | 0.06 | 0.22 |
+| our JavaScript, lock file, `frame.html`, `sw.js` | 0.10 | 0.03 | 0.03 |
+| **Total, MB** | **18.1** | **9.0** | **10.1** |
+
+The two CDNs differ because they compress different things. I checked with
+real requests: jsDelivr applies Brotli to JavaScript, WebAssembly and
+unknown binary types; unpkg applies gzip to JavaScript and WebAssembly only;
+neither touches a `.zip`. The wasm and `pyodide.asm.js` figures are the
+`content-length` those CDNs return for Pyodide 0.27.2 today. On your own
+server with gzip on everything it is 9.9 MB.
+
+That difference is why the packages are one archive. The first version of
+this prototype shipped 37 separate wheels, which is the obvious design and
+what the lock file format is for. It cost 12.9 MB from jsDelivr but **24.9 MB
+from unpkg**, which serves wheels uncompressed. Compressing everything
+together ourselves, with xz, is smaller than either CDN manages and costs the
+same from anywhere. Python's own `lzma` module unpacks it in about a second.
+
+`pip`, `uvicorn` and `hupper` are left out by default (`--full` keeps them):
+Datasette depends on them for `datasette install` and `datasette serve`,
+which cannot run inside Pyodide. That is worth 1.1 MB. `--exclude setuptools`
+passes the self-test and saves another 0.5 MB; I kept it because older
+plugins import `pkg_resources`.
+
+Almost half of what is left is CPython itself. `python_stdlib.zip` would be
+1.5 MB if it were recompressed as a whole rather than file by file, but
+Pyodide needs it before Python (and so before `lzma`) exists.
 
 ## The web component
 
@@ -88,6 +184,7 @@ bird,2
 | `drop` | Accept files dropped onto the element: `.db`, `.csv`, `.json`, `.sql` |
 | `autoheight` | Grow to fit the page being shown instead of scrolling |
 | `assets` | Where the package's files are, if not next to the module |
+| `service-worker` | A service worker file on your site that imports the package's `sw.js` - see "From a CDN" |
 
 Inline `<script>` children: `text/csv`, `application/sql`, `application/json`
 (with `data-table` / `data-database`), and `application/json` with
@@ -121,8 +218,7 @@ const rows = await datasette.query("select * from animals", { database: "data" }
 const response = await datasette.fetch("/trees/-/query.json?sql=select+1");
 ```
 
-This mode needs no service worker, so unlike the element it also works when
-the package is loaded from **another origin** (a CDN that sends CORS headers).
+This mode needs no service worker, so it works from any CDN.
 
 ## In Node
 
@@ -136,7 +232,7 @@ const server = await ds.serve({ port: 8001 });   // a real Datasette, no Python 
 
 `mount: true` opens database files where they are (through Emscripten's
 NODEFS), so writes made through Datasette land in the real file. Startup takes
-about four seconds.
+four to five seconds.
 
 ## How it works
 
@@ -147,23 +243,27 @@ build/build.mjs
        in your browser on every visit
   2. reads back what got installed and writes a new pyodide-lock.json for
      exactly that set, every file pinned by sha256
-  3. copies the wheels + Pyodide runtime + our JavaScript into dist/
+  3. packs everything Datasette needs into one site-packages.tar.xz, laid
+     out as installed; plugins and micropip stay as separate wheels
   4. starts Datasette from dist/ in a fresh process with fetch() disabled
      and makes real requests - the build fails if the bundle is incomplete
 
 dist/
   datasette-lite.js   DatasetteLite + <datasette-lite>     (page)
   worker.js           module Web Worker                    (browser)
+  frame.html          hosts the element when the package is on a CDN
   node.js             startDatasette() + serve()           (Node)
   core.js             boots Pyodide + Datasette; shared by both
   python.js           the Python source + manifest, generated
   sw.js               ../sw.js, unchanged
-  pyodide/            pyodide.asm.wasm, python_stdlib.zip, pyodide-lock.json, 40 wheels
+  pyodide/            pyodide.asm.wasm, python_stdlib.zip, site-packages.tar.xz,
+                      pyodide-lock.json + the wheels it lists
 ```
 
-At run time nothing is resolved. `pyodide.loadPackage("datasette")` reads the
-generated lock file and loads local wheels; micropip is in the bundle but is
-only loaded when `install` names a plugin that is not.
+At run time nothing is resolved. The archive is unpacked into Pyodide's file
+system and its shared libraries are loaded. `install="..."` loads a plugin
+from the lock file if it was built in with `--install`, and only falls back
+to micropip and PyPI if it was not.
 
 The ASGI bridge and cookie jar are cut out of `../webworker.js` at build time
 and `sw.js` is copied as it is, so the request path - iframe, service worker,
@@ -177,7 +277,8 @@ Build options:
 node build/build.mjs --datasette 1.0a42           # pin a release
 node build/build.mjs --stable                     # latest stable instead of latest pre-release
 node build/build.mjs --install datasette-cluster-map   # bake a plugin into the bundle
-node build/build.mjs --exclude pip --exclude setuptools  # leave packages out
+node build/build.mjs --exclude setuptools         # leave a package out
+node build/build.mjs --full                       # keep pip, uvicorn and hupper
 node build/build.mjs --out some/dir
 ```
 
@@ -187,7 +288,9 @@ node build/build.mjs --out some/dir
 architecture carries over to a component without changes to `sw.js`: the page
 that hosts the element does not have to be inside the service worker's scope,
 only the iframe does. So the package's files can live in `/datasette-lite/`
-and be embedded from any page on the same origin.
+and be embedded from any page on the same origin. `sw.js` also works unchanged
+when a file on another site pulls it in with `importScripts`, because it
+works out its scope from where it is running.
 
 **Resolving at build time is a real improvement over the hosted site**, not
 just a packaging detail:
@@ -202,26 +305,8 @@ just a packaging detail:
   but it crashes on exactly that duplicate, so `build/resolve.py` reads the
   installed distributions itself.
 
-**Size.** 31.8 MB on disk, 13.9 MB as an npm tarball, roughly 25 MB over the
-wire for a first browser load (the wheels are already compressed). The largest
-pieces:
-
-| | MB |
-| --- | --- |
-| `pyodide.asm.wasm` (CPython) | 9.6 |
-| `pydantic_core` | 4.5 |
-| `setuptools` | 2.9 |
-| `python_stdlib.zip` | 2.3 |
-| `openssl` | 1.9 |
-| `pip` | 1.9 |
-| `pydantic` | 1.6 |
-| `sqlite3` | 1.4 |
-| Datasette itself | 0.6 |
-
-`--exclude pip --exclude setuptools --exclude hupper --exclude uvicorn` still
-passes the self-test and takes 5 MB off. Datasette declares those as
-dependencies but does not import them on this path. I left them in by default
-because plugins may.
+**Size** is covered under "Page weight" above: 17.7 MB on disk, 10.1 MB as
+an npm tarball, 9 to 10 MB over the wire.
 
 **Things that needed care**, each now handled:
 
@@ -235,13 +320,21 @@ because plugins may.
   `loadPyodide` is still running (its CDN URL is not set yet), so the build
   loads the extra standard library modules by name afterwards.
 - A Node `Buffer` is a `Uint8Array` that Pyodide refuses to convert.
+- Unpacking an archive is not enough for packages with compiled modules
+  (`_ssl`, `_sqlite3`, `pydantic_core`): Pyodide has to load each `.so` before
+  Python imports it. The build records where they are and `core.js` loads
+  them through `pyodide._api.loadDynlib`, which is a private API. The
+  self-test would catch a Pyodide upgrade that changed it.
 
 **Limits that are inherent**, rather than unfinished:
 
-- The element needs the package's files on the **same origin** as the page.
-  Service workers and Web Workers cannot be loaded cross-origin, so
-  `<script src="https://cdn.../datasette-lite.js">` can run queries but cannot
-  show the UI. `copy-assets` exists for this.
+- A service worker has to be registered from its own origin. That is what
+  the three CDN options above work around; none of them can be made to
+  disappear.
+- In frame mode Datasette is a third-party iframe. `autoheight` does not work
+  there, and a browser set to block third-party storage may refuse the
+  service worker. The tests run it as a genuine third party (`localhost`
+  embedding `127.0.0.1`) in Chromium only.
 - It needs HTTP(S). A `file://` page cannot register a service worker.
 - Each element is a separate Python interpreter, with its own startup time
   and memory. I have not measured the memory.
@@ -268,7 +361,11 @@ because plugins may.
   releases are numbered 314.x after the Python version they ship.
 - Only checked in Chromium. Module workers and service workers are in Firefox
   and Safari too, but I have not run them.
-- `dist/` is not committed (32 MB of binaries). Publishing would be
+- **Nothing has been fetched from a real CDN**, since the package is not
+  published. The CDN modes are tested against a second local origin that
+  sends CORS headers, and the CDN behaviour they rely on was checked against
+  other packages' files on jsDelivr and unpkg.
+- `dist/` is not committed (18 MB of binaries). Publishing would be
   `npm run build && npm publish` from CI, after dropping `"private"`.
 - Hardcoded `/-/...` URLs that escape `base_url` are rewritten in HTML as on
   the hosted site, but the service worker fallback for ones added by plugin

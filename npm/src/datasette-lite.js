@@ -2,10 +2,26 @@
 // package. Exports the DatasetteLite class (run Datasette, query it, fetch from
 // it) and defines the <datasette-lite> element (show its UI on a page).
 //
-// Everything is loaded relative to this file: worker.js, sw.js and pyodide/
-// must be served from the same directory.
+// Everything is loaded relative to this file: worker.js, sw.js, frame.html and
+// pyodide/ must be served from the same directory. That directory can be on a
+// CDN - see "How the UI gets shown" below.
 
-const ASSETS = new URL("./", import.meta.url);
+// Replaced with the package version by the build
+const VERSION = "__VERSION__";
+const CDN_HOSTS = ["cdn.jsdelivr.net", "fastly.jsdelivr.net", "unpkg.com"];
+
+// Where this module was loaded from. A CDN URL without a version
+// (.../npm/datasette-lite/dist/) is pinned to the version of this file, so the
+// worker, the wheels and the lock file can never come from a newer release
+// than the code that loads them.
+function moduleAssets() {
+  const url = new URL("./", import.meta.url);
+  if (CDN_HOSTS.includes(url.hostname)) {
+    url.pathname = url.pathname.replace(/\/datasette-lite\/(?=dist\/)/, `/datasette-lite@${VERSION}/`);
+  }
+  return url;
+}
+const ASSETS = moduleAssets();
 // Version of the messages exchanged with sw.js - see PROTOCOL there
 const PROTOCOL = 1;
 const NULL_BODY = new Set([101, 204, 205, 304]);
@@ -46,25 +62,27 @@ function listenToServiceWorker() {
 
 const registrations = new Map();
 
-function registerServiceWorker(assets) {
-  if (!registrations.has(assets.href)) {
-    registrations.set(assets.href, (async () => {
+// The service worker script has to be on this page's origin: either the
+// package's own sw.js, or a one-line file that imports it from a CDN.
+function registerServiceWorker(script) {
+  if (!registrations.has(script.href)) {
+    registrations.set(script.href, (async () => {
       if (!("serviceWorker" in navigator)) {
         throw new Error(
           "Showing Datasette needs a browser with service worker support. " +
           "Service workers are unavailable in some private browsing modes.",
         );
       }
-      if (assets.origin != location.origin) {
+      if (script.origin != location.origin) {
         throw new Error(
-          `Showing Datasette needs ${assets.href} to be on the same origin as this page ` +
-          "(a service worker cannot be loaded from another origin). Copy the package's " +
-          "dist/ directory to your own site. DatasetteLite's fetch() and query() work cross-origin.",
+          `A service worker cannot be loaded from another origin (${script.href}). ` +
+          "Add a one-line service worker file to your own site and name it in the " +
+          "service-worker attribute - see the datasette-lite README.",
         );
       }
       listenToServiceWorker();
-      const registration = await navigator.serviceWorker.register(new URL("sw.js", assets), {
-        scope: assets.pathname,
+      const registration = await navigator.serviceWorker.register(script, {
+        scope: new URL("./", script).pathname,
       });
       // Not navigator.serviceWorker.ready: that waits for a worker that
       // controls *this* page, which is usually outside the scope
@@ -79,7 +97,7 @@ function registerServiceWorker(assets) {
       }
     })());
   }
-  return registrations.get(assets.href);
+  return registrations.get(script.href);
 }
 
 // --- DatasetteLite -----------------------------------------------------------
@@ -139,6 +157,7 @@ export class DatasetteLite extends EventTarget {
    * @param {boolean} [options.root]     sign in as root
    * @param {boolean} [options.memory]   add the _memory database
    * @param {boolean} [options.ui]       set up the service worker so appUrl() can be shown in an iframe
+   * @param {string|URL} [options.serviceWorker] the service worker script, if not the package's own sw.js
    * @param {string|URL} [options.assets] where the package's dist/ directory is served
    */
   constructor(options = {}) {
@@ -147,9 +166,10 @@ export class DatasetteLite extends EventTarget {
     if (!this.assets.pathname.endsWith("/")) this.assets.pathname += "/";
     this.session = randomSession();
     this.ui = !!options.ui;
+    this.serviceWorker = new URL(options.serviceWorker || new URL("sw.js", this.assets), document.baseURI);
     // Datasette's base_url. With a UI every URL it generates has to stay
-    // inside the service worker's scope.
-    this.baseUrl = this.ui ? `${this.assets.pathname}app/${this.session}/` : "/";
+    // inside the service worker's scope: the directory its script is in.
+    this.baseUrl = this.ui ? `${new URL("./", this.serviceWorker).pathname}app/${this.session}/` : "/";
     this.manifest = null;
     this._pending = new Map();
     this._nextId = 1;
@@ -196,7 +216,7 @@ export class DatasetteLite extends EventTarget {
     }]);
     if (this.ui) {
       sessions.set(this.session, this);
-      await Promise.all([registerServiceWorker(this.assets), start]);
+      await Promise.all([registerServiceWorker(this.serviceWorker), start]);
     }
     this.manifest = await start;
     return this;
@@ -237,7 +257,7 @@ export class DatasetteLite extends EventTarget {
   /** The URL that shows a Datasette path, for an iframe. Needs {ui: true}. */
   appUrl(path = "/") {
     if (!this.ui) throw new Error("appUrl() needs the ui option");
-    return new URL(this.baseUrl.slice(0, -1) + (path.startsWith("/") ? path : "/" + path), this.assets).href;
+    return new URL(this.baseUrl.slice(0, -1) + (path.startsWith("/") ? path : "/" + path), location.origin).href;
   }
 
   /**
@@ -320,6 +340,164 @@ export class DatasetteLite extends EventTarget {
     if (this._worker) this._worker.terminate();
     this._worker = null;
     this._failAll(new Error("This Datasette has been stopped"));
+  }
+}
+
+// --- Datasette in a frame on another origin ------------------------------------
+//
+// A service worker can only be registered by a page on its own origin. When
+// the package is on a CDN that serves HTML (unpkg does, jsDelivr does not) the
+// element can still show Datasette with no files on the host site at all: it
+// embeds the package's frame.html, which is on the CDN's origin and so can
+// register the CDN's copy of sw.js, and talks to it with postMessage.
+
+const FRAME_TIMEOUT_MS = 20000;
+
+async function fetchBytes(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not load ${url}: HTTP ${response.status}`);
+  return response.arrayBuffer();
+}
+
+// The frame's worker is on the CDN's origin, where the host site's files
+// would need CORS headers. So the host page reads them and sends the bytes.
+async function frameOptions(options) {
+  const result = { ...options };
+  delete result.assets;
+  for (const kind of ["databases", "csv", "json", "sql"]) {
+    result[kind] = await Promise.all((options[kind] || []).map(async (item) => {
+      const source = await normalizeSource(item);
+      if (source.data == null && source.text == null && source.url) {
+        source.data = await fetchBytes(source.url);
+      }
+      return source;
+    }));
+  }
+  for (const kind of ["metadata", "config"]) {
+    if (typeof options[kind] == "string") {
+      const url = new URL(options[kind], document.baseURI).href;
+      result[kind] = { __text: new TextDecoder().decode(await fetchBytes(url)) };
+    }
+  }
+  return result;
+}
+
+class FramedDatasette extends EventTarget {
+  constructor(frame, assets, options) {
+    super();
+    this.assets = assets;
+    this.manifest = null;
+    this._frame = frame;
+    this._pending = new Map();
+    this._nextId = 1;
+    this._port = null;
+    this.ready = new Promise((resolve, reject) => {
+      this._resolveReady = resolve;
+      this._rejectReady = reject;
+    });
+    this.ready.catch(() => {});
+    this._onMessage = (event) => {
+      if (
+        this._port || event.source !== frame.contentWindow || event.origin != assets.origin ||
+        !event.data || event.data.type != "datasette-lite-frame-hello"
+      ) {
+        return;
+      }
+      clearTimeout(this._timer);
+      this._connect(options).catch((error) => this._rejectReady(error));
+    };
+    window.addEventListener("message", this._onMessage);
+    this._timer = setTimeout(() => {
+      this._rejectReady(new Error(
+        `${new URL("frame.html", assets).href} did not load as a page. Some CDNs (jsDelivr) ` +
+        "serve HTML as plain text. Either load datasette-lite from unpkg, or add a one-line " +
+        "service worker file to your own site and name it in the service-worker attribute.",
+      ));
+    }, FRAME_TIMEOUT_MS);
+    frame.src = new URL("frame.html", assets).href;
+  }
+
+  async _connect(options) {
+    const channel = new MessageChannel();
+    this._port = channel.port1;
+    this._port.onmessage = (event) => {
+      const data = event.data;
+      if (data.event == "ready") {
+        this.manifest = data.detail;
+        this._resolveReady(this);
+      } else if (data.event == "error") {
+        this._rejectReady(new Error(data.detail));
+      } else if (data.event) {
+        this.dispatchEvent(new CustomEvent(data.event, { detail: data.detail }));
+      } else {
+        const call = this._pending.get(data.id);
+        this._pending.delete(data.id);
+        if (!call) return;
+        if ("error" in data) call.reject(new Error(data.error));
+        else call.resolve(data.result);
+      }
+    };
+    const start = await frameOptions(options);
+    this._frame.contentWindow.postMessage(
+      { type: "datasette-lite-frame-start", options: start },
+      this.assets.origin,
+      [channel.port2],
+    );
+    this.dispatchEvent(new Event("connected"));
+  }
+
+  async _call(method, args, transfer = []) {
+    await this.ready;
+    return new Promise((resolve, reject) => {
+      const id = this._nextId++;
+      this._pending.set(id, { resolve, reject });
+      this._port.postMessage({ id, method, args }, transfer);
+    });
+  }
+
+  async fetch(path, init = {}) {
+    const request = new Request(new URL(path, "http://localhost"), init);
+    const hasBody = !["GET", "HEAD"].includes(request.method);
+    const response = await this._call("fetch", [path, {
+      method: request.method,
+      headers: [...request.headers.entries()],
+      body: hasBody ? await request.arrayBuffer() : null,
+    }]);
+    return new Response(NULL_BODY.has(response.status) ? null : response.body, {
+      status: response.status,
+      headers: response.headers,
+    });
+  }
+
+  query(sql, options) {
+    return this._call("query", [sql, options]);
+  }
+
+  async add(item) {
+    return this._call("add", [await normalizeSource(item)]);
+  }
+
+  async addFile(file, options = {}) {
+    return this._call("addFile", [{ name: file.name, data: await file.arrayBuffer() }, options]);
+  }
+
+  async readDatabase(name) {
+    return new Uint8Array(await this._call("readDatabase", [name]));
+  }
+
+  navigate(path, options) {
+    return this._call("navigate", [path, options]);
+  }
+
+  terminate() {
+    clearTimeout(this._timer);
+    window.removeEventListener("message", this._onMessage);
+    if (this._port) this._port.close();
+    this._frame.src = "about:blank";
+    const error = new Error("This Datasette has been stopped");
+    this._rejectReady(error);
+    for (const call of this._pending.values()) call.reject(error);
+    this._pending.clear();
   }
 }
 
@@ -452,6 +630,10 @@ export class DatasetteLiteElement extends HTMLElement {
     this._path = null;
     /** The DatasetteLite instance, once the element is connected */
     this.datasette = null;
+    /** Set before the element is connected to use these instead of its attributes */
+    this.options = null;
+    /** "local", or "frame" when Datasette runs in the package's frame.html on a CDN */
+    this.mode = null;
     this._frame.addEventListener("load", () => this._onFrameLoad());
     this.addEventListener("dragover", (event) => this._onDragOver(event));
     this.addEventListener("dragleave", () => this._showDrop(false));
@@ -465,16 +647,39 @@ export class DatasetteLiteElement extends HTMLElement {
 
   connectedCallback() {
     if (this.datasette) return;
-    const options = this._options();
-    this.datasette = new DatasetteLite({ ...options, ui: true });
+    const options = this.options || this._options();
+    const assets = new URL(options.assets || ASSETS, document.baseURI);
+    if (!assets.pathname.endsWith("/")) assets.pathname += "/";
+    const serviceWorker = this.getAttribute("service-worker") || options.serviceWorker;
+    const path = (this.hasAttribute("hash") && location.hash.length > 1 && hashPath()) ||
+      this.getAttribute("path") || "/";
+    const loading = this.shadowRoot.querySelector(".loading");
+    // How the UI gets shown. The service worker that answers for Datasette
+    // has to be registered by a page on the worker's own origin:
+    //   local - the package, or a service-worker file naming it, is on this
+    //           page's origin, so this element registers it
+    //   frame - the package is on another origin (a CDN), so the page that
+    //           registers it is the package's own frame.html
+    this.mode = assets.origin == location.origin || serviceWorker ? "local" : "frame";
+    if (this.mode == "frame") {
+      this.datasette = new FramedDatasette(this._frame, assets, { ...options, path, drop: this.hasAttribute("drop") });
+      // The frame has its own loading screen
+      this.datasette.addEventListener("connected", () => {
+        this._frame.hidden = false;
+        loading.hidden = true;
+      });
+      this.datasette.addEventListener("navigate", (event) => this._navigated(event.detail));
+    } else {
+      this.datasette = new DatasetteLite({ ...options, serviceWorker, ui: true });
+    }
     this.datasette.addEventListener("log", (event) => this._log(event.detail));
     /** Resolves to this element when Datasette is showing */
     this.ready = this.datasette.ready.then(() => {
-      const path = (this.hasAttribute("hash") && location.hash.length > 1 && hashPath()) ||
-        this.getAttribute("path") || "/";
-      this._frame.hidden = false;
-      this.shadowRoot.querySelector(".loading").hidden = true;
-      this.navigate(path, { replace: true });
+      if (this.mode == "local") {
+        this._frame.hidden = false;
+        loading.hidden = true;
+        this.navigate(path, { replace: true });
+      }
       this.dispatchEvent(new CustomEvent("datasette-ready", { detail: this.datasette.manifest }));
       return this;
     });
@@ -527,6 +732,10 @@ export class DatasetteLiteElement extends HTMLElement {
 
   /** Show a Datasette path */
   navigate(path, { replace = false } = {}) {
+    if (this.mode == "frame") {
+      this.datasette.navigate(path, { replace });
+      return;
+    }
     const url = this.datasette.appUrl(path);
     if (replace && this._frame.contentWindow) {
       this._frame.contentWindow.location.replace(url);
@@ -546,7 +755,8 @@ export class DatasetteLiteElement extends HTMLElement {
   /** Load a File (a database, CSV, JSON or SQL) and show it */
   async addFile(file, options) {
     const added = await this.datasette.addFile(file, options);
-    this.navigate("/" + [added.database, added.table].filter(Boolean).map(encodeURIComponent).join("/"));
+    // In a frame, the element inside it has already done this
+    if (this.mode == "local") this.navigate("/" + [added.database, added.table].filter(Boolean).map(encodeURIComponent).join("/"));
     return added;
   }
 
@@ -603,21 +813,27 @@ export class DatasetteLiteElement extends HTMLElement {
       // provider, say) - reading its location throws a SecurityError
       return;
     }
+    if (this.mode != "local") return;
     const root = this.datasette.baseUrl.slice(0, -1);
     if (location_.origin != location.origin || !(location_.pathname + "/").startsWith(root + "/")) {
       return;
     }
-    this._path = (location_.pathname.slice(root.length) || "/") + location_.search;
+    if (doc && doc.contentType == "text/html" && doc.body) {
+      this._enhance(doc);
+    }
+    this._navigated({
+      path: (location_.pathname.slice(root.length) || "/") + location_.search,
+      title: (doc && doc.title) || "",
+    });
+  }
+
+  _navigated(detail) {
+    this._path = detail.path;
     if (this.hasAttribute("hash") && location.hash != "#" + this._path) {
       // replaceState: the iframe navigation already created a history entry
       history.replaceState(null, "", "#" + this._path);
     }
-    if (doc && doc.contentType == "text/html" && doc.body) {
-      this._enhance(doc);
-    }
-    this.dispatchEvent(new CustomEvent("datasette-navigate", {
-      detail: { path: this._path, title: (doc && doc.title) || "" },
-    }));
+    this.dispatchEvent(new CustomEvent("datasette-navigate", { detail }));
   }
 
   // Called for every HTML page Datasette renders in the iframe

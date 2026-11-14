@@ -15,7 +15,10 @@ let browser, site, cdn;
 const external = [];
 
 before(async () => {
-  [site, cdn] = await Promise.all([startServer(), startServer()]);
+  // A site with no CORS headers, and a "CDN" that sends them. localhost and
+  // 127.0.0.1 are different sites, not just different origins, so the CDN is
+  // a third party to the page - as a real one is.
+  [site, cdn] = await Promise.all([startServer({ hostname: "localhost" }), startServer({ cors: true })]);
   browser = await chromium.launch();
 });
 after(async () => {
@@ -27,7 +30,7 @@ after(async () => {
 async function openPage(url) {
   const context = await browser.newContext();
   await context.route(
-    (requestUrl) => requestUrl.hostname != "127.0.0.1",
+    (requestUrl) => !["127.0.0.1", "localhost"].includes(requestUrl.hostname),
     (route) => {
       external.push(route.request().url());
       return route.abort();
@@ -163,6 +166,80 @@ test("without a UI the package can be loaded from another origin", async () => {
   assert.deepEqual(result.rows, [{ legs: 6 }]);
   // No service worker was needed, or registered
   assert.equal(result.registrations, 0);
+  await page.context().close();
+});
+
+// What a page can do with the element, whichever way the UI is shown
+async function exercise(page) {
+  return page.evaluate(async () => {
+    const element = document.getElementById("ds");
+    const insert = await element.fetch("/demo/plants/-/insert", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ row: { common_name: "Kale", height_cm: 50 } }),
+    });
+    const added = await element.addFile(new File(["day,mm\nMon,3"], "rain.csv"));
+    return {
+      insert: insert.status,
+      plants: (await element.query("select count(*) as n from plants", { database: "demo" }))[0].n,
+      animals: (await element.query("select sum(legs) as n from animals", { database: "data" }))[0].n,
+      added,
+      magic: new TextDecoder().decode((await element.readDatabase("demo")).slice(0, 15)),
+      registrations: (await navigator.serviceWorker.getRegistrations()).map((r) => new URL(r.scope).pathname),
+    };
+  });
+}
+const EXPECTED = {
+  insert: 201,
+  plants: 11,
+  animals: 6,
+  added: { database: "data", table: "rain" },
+  magic: "SQLite format 3",
+};
+
+test("from a CDN with no files on the site: Datasette runs in the package's frame.html", async () => {
+  const cdnAssets = `${cdn.origin}/vendor/datasette-lite/`;
+  const page = await openPage(`${site.origin}/pages/cdn.html?cdn=${encodeURIComponent(cdnAssets)}`);
+  await page.waitForFunction(() => document.getElementById("ds"));
+  await ready(page, "ds");
+  assert.equal(await page.evaluate(() => document.getElementById("ds").mode), "frame");
+  // The element's iframe is the CDN's page; Datasette is an iframe inside that
+  const outer = page.frameLocator("#ds iframe");
+  assert.equal(await page.locator("#ds iframe").getAttribute("src"), cdnAssets + "frame.html");
+  const datasette = outer.frameLocator("datasette-lite iframe");
+  await datasette.locator("table.rows-and-columns tbody tr").first().waitFor();
+  assert.equal(await datasette.locator("table.rows-and-columns tbody tr").count(), 10);
+  await datasette.locator("text=Insert row").waitFor();
+
+  // Navigation inside the frame is reported to the page, and to its #fragment
+  const navigated = navigationTo(page, "ds", /^\/demo\/gardens\/1$/);
+  await datasette.locator('a[href$="/demo/gardens/1"]').first().click();
+  await navigated;
+  assert.equal(new URL(page.url()).hash, "#/demo/gardens/1");
+  // ...and the page can send it somewhere
+  const back = navigationTo(page, "ds", /^\/demo$/);
+  await page.evaluate(() => document.getElementById("ds").navigate("/demo"));
+  await back;
+
+  // No service worker on the site itself
+  assert.deepEqual(await exercise(page), { ...EXPECTED, registrations: [] });
+  await page.context().close();
+});
+
+test("from a CDN with a one-line service worker file on the site", async () => {
+  const cdnAssets = `${cdn.origin}/vendor/datasette-lite/`;
+  const page = await openPage(`${site.origin}/pages/cdn.html?shim=1&cdn=${encodeURIComponent(cdnAssets)}`);
+  await page.waitForFunction(() => document.getElementById("ds"));
+  await ready(page, "ds");
+  assert.equal(await page.evaluate(() => document.getElementById("ds").mode), "local");
+  // Datasette's pages are on the site's own origin, under the directory of sw-shim.js
+  const datasette = page.frameLocator("#ds iframe");
+  await datasette.locator("table.rows-and-columns tbody tr").first().waitFor();
+  assert.match(await page.evaluate(() => document.getElementById("ds").datasette.appUrl("/")), new RegExp(`^${site.origin}/pages/app/`));
+  const navigated = navigationTo(page, "ds", /^\/demo\/gardens\/1$/);
+  await datasette.locator('a[href$="/demo/gardens/1"]').first().click();
+  await navigated;
+  assert.deepEqual(await exercise(page), { ...EXPECTED, registrations: ["/pages/"] });
   await page.context().close();
 });
 

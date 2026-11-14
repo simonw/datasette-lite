@@ -2,7 +2,8 @@ export interface Manifest {
   datasette: string;
   pyodide: string;
   python: string;
-  load: string[];
+  archive: { file: string; size: number; sha256: string; dynlibs: Array<{ path: string; global: boolean }> };
+  wheels: string[];
   packages: Record<string, string>;
 }
 
@@ -46,6 +47,8 @@ export interface DatasetteLiteOptions {
   ui?: boolean;
   /** Where the package's dist/ directory is served. Defaults to next to the module. */
   assets?: string | URL;
+  /** A same-origin service worker script that imports the package's sw.js, when the package is on a CDN */
+  serviceWorker?: string | URL;
 }
 
 export type AddItem =
@@ -72,12 +75,16 @@ export class DatasetteLite extends EventTarget {
 
 /**
  * <datasette-lite src="a.db b.db" csv="..." json="..." sql="..." metadata="..."
- *   config="..." install="..." path="/a" root memory drop hash autoheight>
+ *   config="..." install="..." path="/a" service-worker="/sw.js" root memory drop hash autoheight>
  *
  * Events: datasette-ready, datasette-error, datasette-log, datasette-navigate
  */
 export class DatasetteLiteElement extends HTMLElement {
   datasette: DatasetteLite | null;
+  /** Set before connecting to use these instead of the element's attributes */
+  options: DatasetteLiteOptions | null;
+  /** "frame" when Datasette runs in the package's frame.html on another origin */
+  readonly mode: "local" | "frame" | null;
   ready: Promise<DatasetteLiteElement>;
   readonly path: string | null;
   navigate(path: string, options?: { replace?: boolean }): void;

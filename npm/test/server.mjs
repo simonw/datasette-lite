@@ -19,7 +19,7 @@ const TYPES = {
   ".wasm": "application/wasm",
 };
 
-export async function startServer() {
+export async function startServer({ cors = false, hostname = "127.0.0.1" } = {}) {
   const server = http.createServer(async (req, res) => {
     const pathname = decodeURI(new URL(req.url, "http://localhost").pathname);
     const mount = Object.keys(MOUNTS).find((prefix) => pathname.startsWith(prefix));
@@ -30,8 +30,8 @@ export async function startServer() {
       const body = await fs.readFile(file);
       res.writeHead(200, {
         "content-type": TYPES[path.extname(file)] || "application/octet-stream",
-        // Lets the other test server play the part of a CDN
-        "access-control-allow-origin": "*",
+        // Only the server playing the part of a CDN sends this
+        ...(cors ? { "access-control-allow-origin": "*" } : {}),
       });
       res.end(body);
     } catch (error) {
@@ -40,5 +40,5 @@ export async function startServer() {
     }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { server, origin: `http://127.0.0.1:${server.address().port}` };
+  return { server, origin: `http://${hostname}:${server.address().port}` };
 }

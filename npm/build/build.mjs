@@ -5,8 +5,9 @@
 //                        [--exclude PACKAGE]... [--out DIR]
 //
 // --install adds a plugin to the bundle, so install="..." works offline.
-// --exclude leaves a resolved package out (pip, say: Datasette depends on it
-// for "datasette install", which can never work here).
+// --exclude leaves a resolved package out. pip, uvicorn and hupper are left
+// out unless --full is given: Datasette depends on them for "datasette
+// install" and "datasette serve", neither of which can run inside Pyodide.
 //
 // How it works:
 //
@@ -38,13 +39,14 @@ const PYODIDE_DIR = path.dirname(require.resolve("pyodide/package.json"));
 
 // --- Options -----------------------------------------------------------------
 
-const options = { datasette: null, stable: false, install: [], exclude: [], out: path.join(ROOT, "dist") };
+const options = { datasette: null, stable: false, install: [], exclude: [], full: false, out: path.join(ROOT, "dist") };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] == "--datasette") options.datasette = argv[++i];
   else if (argv[i] == "--stable") options.stable = true;
   else if (argv[i] == "--install") options.install.push(argv[++i]);
   else if (argv[i] == "--exclude") options.exclude.push(argv[++i]);
+  else if (argv[i] == "--full") options.full = true;
   else if (argv[i] == "--out") options.out = path.resolve(argv[++i]);
   else throw new Error(`Unknown option ${argv[i]}`);
 }
@@ -107,7 +109,7 @@ const upstreamByName = new Map(
 
 const packages = {};
 const files = []; // {fileName, from: path | url, sha256}
-const excluded = new Set(options.exclude.map(canonical));
+const excluded = new Set([...options.exclude, ...(options.full ? [] : ["pip", "uvicorn", "hupper"])].map(canonical));
 const fromPypi = installed.filter((dist) => dist.url && !excluded.has(canonical(dist.name)));
 const pypiNames = new Set(fromPypi.map((dist) => canonical(dist.name)));
 
@@ -149,7 +151,42 @@ for (const entry of Object.values(packages)) {
     .map((name) => Object.keys(packages).find((key) => canonical(packages[key].name) == name))
     .filter(Boolean);
 }
-const lock = { info: upstreamLock.info, packages };
+
+// Everything Datasette needs goes into one archive (see step 3). What stays in
+// the lock file as separate wheels is only loaded on request: lzma (needed to
+// open the archive), micropip, and any plugins added with --install.
+const BASE = [
+  "datasette", "sqlite-utils", "python-multipart", "idna", "typing-extensions",
+  "setuptools", "ssl", "sqlite3", "hashlib", "pydecimal",
+];
+const base = new Set();
+(function collect(names) {
+  for (const name of names) {
+    if (!packages[name] || base.has(name) || name == "lzma") continue;
+    base.add(name);
+    collect(packages[name].depends);
+  }
+})(BASE);
+// ...and nothing else: a dependency of an excluded package, say
+const wanted = new Set();
+(function collect(names) {
+  for (const name of names) {
+    if (!packages[name] || base.has(name) || wanted.has(name)) continue;
+    wanted.add(name);
+    collect(packages[name].depends);
+  }
+})(["lzma", "micropip", ...options.install.map((spec) => canonical(spec.split(/[=<>!~ \[;@]/)[0]))]);
+for (const name of Object.keys(packages)) {
+  if (!base.has(name) && !wanted.has(name)) delete packages[name];
+}
+const lock = {
+  info: upstreamLock.info,
+  packages: Object.fromEntries(
+    Object.entries(packages)
+      .filter(([name]) => !base.has(name))
+      .map(([name, entry]) => [name, { ...entry, depends: entry.depends.filter((dep) => !base.has(dep)) }]),
+  ),
+};
 
 // --- 3. Write dist/ ----------------------------------------------------------
 
@@ -160,7 +197,8 @@ await fs.mkdir(distPyodide, { recursive: true });
 for (const name of ["pyodide.mjs", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip"]) {
   await fs.copyFile(path.join(PYODIDE_DIR, name), path.join(distPyodide, name));
 }
-await Promise.all(files.map(async (file) => {
+const kept = new Set(Object.values(packages).map((entry) => entry.file_name));
+await Promise.all(files.filter((file) => kept.has(file.fileName)).map(async (file) => {
   let bytes;
   if (/^https?:/.test(file.from)) {
     const cached = path.join(cacheDir, file.fileName);
@@ -180,6 +218,30 @@ await Promise.all(files.map(async (file) => {
 }));
 await fs.writeFile(path.join(distPyodide, "pyodide-lock.json"), JSON.stringify(lock));
 
+// One solid, xz-compressed archive of the base packages, already laid out as
+// they are installed. Wheels are zip files: each file in them is compressed on
+// its own, and CDNs differ on whether they compress a .whl in transit at all
+// (jsDelivr does, unpkg does not). Compressing everything together, ourselves,
+// is about a third of the size and costs the same wherever it is served from.
+// Python's own lzma module writes it here and opens it in the browser.
+const ARCHIVE = "site-packages.tar.xz";
+resolver.FS.mkdirTree("/bundle");
+resolver.FS.mount(resolver.FS.filesystems.NODEFS, { root: distPyodide }, "/bundle");
+resolver.globals.set("archive_json", JSON.stringify({
+  out: `/bundle/${ARCHIVE}`,
+  wheels: [...base].sort().map((name) => ({
+    path: `/bundle/${packages[name].file_name}`,
+    dynlib: packages[name].install_dir == "dynlib",
+  })),
+}));
+const archive = JSON.parse(
+  await resolver.runPythonAsync(await fs.readFile(path.join(ROOT, "build", "archive.py"), "utf8")),
+);
+for (const name of base) {
+  await fs.rm(path.join(distPyodide, packages[name].file_name));
+}
+const archiveBytes = await fs.readFile(path.join(distPyodide, ARCHIVE));
+
 // The ASGI bridge and cookie jar are the ones the hosted site runs: they are
 // cut out of ../webworker.js, between its PYTHON-BEGIN/PYTHON-END markers
 const webworker = await fs.readFile(path.join(REPO, "webworker.js"), "utf8");
@@ -192,11 +254,17 @@ const manifest = {
   datasette: datasetteVersion,
   pyodide: pyodideVersion,
   python: upstreamLock.info.python,
-  // Loaded at startup. micropip and its dependencies are in the bundle too,
-  // but only loaded if a plugin has to be installed from PyPI
-  load: ["datasette", "sqlite-utils", "ssl", "sqlite3", "setuptools", "hashlib", "lzma", "pydecimal"]
-    .concat(options.install.map((spec) => canonical(spec.split(/[=<>!~ \[]/)[0])))
-    .filter((name) => packages[name]),
+  // The base packages: one file, unpacked at startup
+  archive: {
+    file: ARCHIVE,
+    size: archiveBytes.length,
+    sha256: sha256(archiveBytes),
+    // Shared libraries have to be loaded by Pyodide before they are imported
+    dynlibs: archive.dynlibs,
+  },
+  // Separate wheels, loaded by name through pyodide-lock.json: lzma at
+  // startup, the rest only if install asks for them
+  wheels: Object.keys(lock.packages).sort(),
   packages: Object.fromEntries(
     Object.entries(packages).map(([key, entry]) => [key, entry.version]).sort(),
   ),
@@ -209,8 +277,10 @@ await fs.writeFile(
     `export const MANIFEST = ${JSON.stringify(manifest, null, 2)};\n`,
 );
 await fs.writeFile(path.join(DIST, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
-for (const name of ["core.js", "worker.js", "datasette-lite.js", "node.js", "datasette-lite.d.ts"]) {
-  await fs.copyFile(path.join(ROOT, "src", name), path.join(DIST, name));
+const packageJson = JSON.parse(await fs.readFile(path.join(ROOT, "package.json"), "utf8"));
+for (const name of ["core.js", "worker.js", "datasette-lite.js", "node.js", "datasette-lite.d.ts", "frame.html"]) {
+  const source = await fs.readFile(path.join(ROOT, "src", name), "utf8");
+  await fs.writeFile(path.join(DIST, name), source.replace('"__VERSION__"', JSON.stringify(packageJson.version)));
 }
 // The service worker is the hosted site's, unchanged
 await fs.copyFile(path.join(REPO, "sw.js"), path.join(DIST, "sw.js"));
@@ -242,7 +312,11 @@ async function dirSize(dir) {
   return total;
 }
 const mb = (bytes) => (bytes / 1024 / 1024).toFixed(1) + " MB";
-const wheels = files.reduce((sum, file) => sum + file.size, 0);
+const onDemand = Object.values(lock.packages).reduce(
+  (sum, entry) => sum + files.find((file) => file.fileName == entry.file_name).size,
+  0,
+);
 log(`Datasette ${datasetteVersion} on Python ${upstreamLock.info.python} (Pyodide ${pyodideVersion})`);
-log(`${files.length} packages, ${mb(wheels)} - ${fromPypi.length} wheels from PyPI, ${files.length - fromPypi.length} from Pyodide`);
+log(`${base.size} packages in ${ARCHIVE}: ${mb(archiveBytes.length)}`);
+log(`${Object.keys(lock.packages).length} wheels loaded on demand: ${mb(onDemand)} (${Object.keys(lock.packages).join(", ")})`);
 log(`${path.relative(process.cwd(), DIST) || "."}/ is ${mb(await dirSize(DIST))} - offline self-test passed`);

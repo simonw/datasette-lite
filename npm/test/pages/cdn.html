@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>The package on another origin</title>
+</head>
+<body>
+<script type="module">
+// ?cdn= is the other origin; ?shim=1 adds the one-line service worker file
+const params = new URLSearchParams(location.search);
+const cdn = params.get("cdn");
+await import(cdn + "datasette-lite.js");
+const element = document.createElement("datasette-lite");
+element.id = "ds";
+// On this site, which sends no CORS headers
+element.setAttribute("src", "/vendor/datasette-lite/demo.db");
+element.setAttribute("path", "/demo/plants");
+element.setAttribute("root", "");
+element.setAttribute("hash", "");
+if (params.get("shim")) {
+  element.setAttribute("service-worker", "/pages/sw-shim.js?cdn=" + encodeURIComponent(cdn));
+}
+element.innerHTML = '<script type="text/csv" data-table="animals">name,legs\ncat,4\nbird,2<\/script>';
+document.body.append(element);
+</script>
+</body>
+</html>

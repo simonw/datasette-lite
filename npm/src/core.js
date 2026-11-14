@@ -6,6 +6,15 @@ import { BRIDGE_PY, RUNTIME_PY, MANIFEST } from "./python.js";
 
 export { MANIFEST };
 
+const ARCHIVE_PATH = "/tmp/datasette-lite-site-packages.tar.xz";
+const UNPACK_PY = `
+import importlib, os, tarfile
+with tarfile.open("${ARCHIVE_PATH}", "r:xz") as archive:
+    archive.extractall("/", filter="fully_trusted")
+os.remove("${ARCHIVE_PATH}")
+importlib.invalidate_caches()
+`;
+
 const canonical = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 
 // "https://example.com/data/Trees.csv?x=1" -> "Trees"
@@ -92,29 +101,42 @@ export async function boot({ loadPyodide, indexURL, readUrl, prepare, log = () =
   const document = (value, name) => {
     if (!value) return null;
     if (typeof value == "string") return input({ url: value }, name);
+    // Already read, by a page that could reach it when this worker cannot
+    if (typeof value.__text == "string") return input({ text: value.__text }, name);
     return input({ text: JSON.stringify(value) }, name);
   };
   const metadata = document(options.metadata, "metadata");
   const config = document(options.config, "config");
 
   log(`Loading Python ${MANIFEST.python} (Pyodide ${MANIFEST.pyodide})`);
+  const archive = readUrl(indexURL + MANIFEST.archive.file);
+  archive.catch(() => {});
   const pyodide = await loadPyodide({ indexURL });
   // node.js uses this to mount real directories into the Pyodide file system
   if (prepare) databases.push(...((await prepare(pyodide)) || []));
   const packageLog = { messageCallback: (line) => line.startsWith("Loading ") && log(line) };
+
+  // The base packages - Datasette and everything it needs - are one archive
+  log(`Loading Datasette ${MANIFEST.datasette}`);
+  await pyodide.loadPackage(["lzma"], packageLog);
+  pyodide.FS.writeFile(ARCHIVE_PATH, await archive);
+  pyodide.runPython(UNPACK_PY);
+  for (const lib of MANIFEST.archive.dynlibs) {
+    // What pyodide.loadPackage() does for a wheel that contains .so files
+    await pyodide._api.loadDynlib(lib.path, lib.global, []);
+  }
 
   // Plugins: from the bundle if they were built into it, otherwise from PyPI
   const bundled = [];
   const micropip = [];
   for (const requirement of options.install || []) {
     const name = canonical(requirement.split(/[=<>!~ \[;@]/)[0]);
-    (MANIFEST.packages[name] ? bundled : micropip).push(MANIFEST.packages[name] ? name : requirement);
+    if (MANIFEST.wheels.includes(name)) bundled.push(name);
+    else if (!MANIFEST.packages[name]) micropip.push(requirement);
   }
-  log(`Loading Datasette ${MANIFEST.datasette}`);
-  await pyodide.loadPackage(
-    [...MANIFEST.load, ...bundled, ...(micropip.length ? ["micropip"] : [])],
-    packageLog,
-  );
+  if (bundled.length || micropip.length) {
+    await pyodide.loadPackage([...bundled, ...(micropip.length ? ["micropip"] : [])], packageLog);
+  }
 
   for (const file of pendingFiles) {
     pyodide.FS.writeFile(file.path, await file.bytes);
