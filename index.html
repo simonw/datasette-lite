@@ -28,7 +28,9 @@ body {
 }
 #shell-content {
   max-width: 44rem;
-  padding: 0 1rem 2rem 1rem;
+  /* Bottom padding leaves room for #shell-footer, which wraps onto three
+     rows on the narrowest phones, so it never covers the end of the page */
+  padding: 0 1rem 9rem 1rem;
 }
 #shell-content h1 {
   margin: 1rem 0 0.75rem 0;
@@ -115,6 +117,23 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* The "Load CSV" etc buttons (see shell.js), pinned to the bottom of the
+   window so they can be used while Datasette is still starting up */
+#shell-footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-top: 1px solid #e3ebf1;
+  background-color: #F8FAFB;
+}
+/* Datasette's link colours */
+#shell-footer a:link {
+  color: #276890;
+}
+#shell-footer a:visited {
+  color: #54AC8E;
+}
 /* Datasette itself runs in this iframe, served by the service worker */
 #datasette {
   display: none;
@@ -128,6 +147,7 @@ body.ready #datasette {
   display: block;
 }
 body.ready #shell-header,
+body.ready #shell-footer,
 body.ready #loading-indicator {
   display: none;
 }
@@ -147,6 +167,8 @@ body.ready #loading-indicator {
   </div>
   <div id="output"></div>
 </main>
+
+<footer id="shell-footer"></footer>
 
 <iframe id="datasette" title="Datasette"></iframe>
 
