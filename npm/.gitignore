@@ -2,3 +2,4 @@ node_modules/
 dist/
 .cache/
 *.tgz
+test/pages/generated/

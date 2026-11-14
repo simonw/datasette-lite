@@ -72,22 +72,56 @@ export async function startDatasette(options = {}) {
     /** The Pyodide instance, for running Python of your own */
     pyodide: runtime.pyodide,
     request: runtime.request,
+    cancel: runtime.cancel,
     add: runtime.add,
     readDatabase: runtime.readDatabase,
 
-    /** fetch() against Datasette: ds.fetch("/db/table.json?_size=5") */
+    /**
+     * fetch() against Datasette: ds.fetch("/db/table.json?_size=5"). A
+     * response Datasette sends in pieces - server-sent events, a streaming
+     * CSV export - is returned as soon as it starts, and its body can be read
+     * as it arrives.
+     */
     async fetch(input, init = {}) {
       const request = new Request(new URL(input, "http://localhost"), init);
       const hasBody = !["GET", "HEAD"].includes(request.method);
-      const response = await runtime.request({
-        method: request.method,
-        url: request.url,
-        headers: [...request.headers.entries()],
-        body: hasBody ? await request.arrayBuffer() : null,
-      });
-      return new Response(NULL_BODY.has(response.status) ? null : response.body, {
-        status: response.status,
-        headers: response.headers,
+      const body = hasBody ? await request.arrayBuffer() : null;
+      return new Promise((resolve, reject) => {
+        let controller = null;
+        let cancelled = false;
+        const stream = {
+          onStart(status, headers) {
+            const readable = new ReadableStream({
+              start(streamController) {
+                controller = streamController;
+              },
+              // The caller stopped reading: tell Datasette the client has gone
+              cancel() {
+                cancelled = true;
+                runtime.cancel(stream.id);
+              },
+            });
+            resolve(new Response(readable, { status, headers }));
+          },
+          onChunk(chunk) {
+            if (!cancelled) controller.enqueue(chunk);
+          },
+        };
+        runtime
+          .request({ method: request.method, url: request.url, headers: [...request.headers.entries()], body }, stream)
+          .then((response) => {
+            if (response.streamed) {
+              if (!cancelled) controller.close();
+            } else {
+              resolve(new Response(NULL_BODY.has(response.status) ? null : response.body, {
+                status: response.status,
+                headers: response.headers,
+              }));
+            }
+          }, (error) => {
+            if (!controller) reject(error);
+            else if (!cancelled) controller.error(error);
+          });
       });
     },
 
@@ -106,20 +140,41 @@ export async function startDatasette(options = {}) {
           for (let i = 0; i < req.rawHeaders.length; i += 2) {
             headers.push([req.rawHeaders[i], req.rawHeaders[i + 1]]);
           }
+          const writeHead = (status, responseHeaders) => {
+            const out = {};
+            for (const [name, value] of responseHeaders) {
+              const key = name.toLowerCase();
+              out[key] = key in out ? [].concat(out[key], value) : value;
+            }
+            res.writeHead(status, out);
+          };
+          // A response sent in pieces is written as it is produced
+          const stream = {
+            onStart: writeHead,
+            onChunk: (chunk) => res.write(chunk),
+          };
+          // The client went away before the response finished
+          res.on("close", () => {
+            if (!res.writableEnded && stream.id) runtime.cancel(stream.id);
+          });
           const response = await runtime.request({
             method: req.method,
             url: `http://${req.headers.host || "localhost"}${req.url}`,
             headers,
             body: chunks.length ? Buffer.concat(chunks) : null,
-          });
-          const out = {};
-          for (const [name, value] of response.headers) {
-            const key = name.toLowerCase();
-            out[key] = key in out ? [].concat(out[key], value) : value;
+          }, stream);
+          if (response.streamed) {
+            res.end();
+          } else {
+            writeHead(response.status, response.headers);
+            res.end(Buffer.from(response.body));
           }
-          res.writeHead(response.status, out);
-          res.end(Buffer.from(response.body));
         } catch (error) {
+          if (res.headersSent) {
+            // Part of a streamed response has gone: all that is left is to break it off
+            res.destroy();
+            return;
+          }
           res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
           res.end("datasette-lite error: " + ((error && error.message) || error));
         }

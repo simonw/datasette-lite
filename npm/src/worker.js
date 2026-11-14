@@ -6,6 +6,8 @@ import { loadPyodide } from "./pyodide/pyodide.mjs";
 import { boot } from "./core.js";
 
 let runtime = null;
+// Streamed responses in progress: the id of the call -> the runtime's request id
+const streams = new Map();
 
 async function readUrl(url) {
   const response = await fetch(url);
@@ -28,9 +30,29 @@ const methods = {
     );
     return [(await runtime).manifest];
   },
-  async request(request) {
-    const response = await (await runtime).request(request);
-    return [response, [response.body]];
+  // With stream set, a response Datasette sends in pieces is posted as it is
+  // produced: {id, start: {status, headers}}, then {id, chunk} any number of
+  // times, then the usual {id, result} - {streamed: true} - or {id, error}.
+  async request(request, stream, id) {
+    try {
+      const response = await (await runtime).request(request, stream && {
+        onStart(status, headers) {
+          streams.set(id, this.id);
+          self.postMessage({ id, start: { status, headers } });
+        },
+        onChunk(chunk) {
+          self.postMessage({ id, chunk: chunk.buffer }, [chunk.buffer]);
+        },
+      });
+      return [response, response.body ? [response.body] : []];
+    } finally {
+      streams.delete(id);
+    }
+  },
+  // The page stopped reading the streamed response to call number id
+  async cancel(id) {
+    if (streams.has(id)) (await runtime).cancel(streams.get(id));
+    return [null];
   },
   async add(item) {
     return [await (await runtime).add(item)];
@@ -44,7 +66,7 @@ const methods = {
 self.onmessage = async (event) => {
   const { id, method, args } = event.data;
   try {
-    const [result, transfer] = await methods[method](...args);
+    const [result, transfer] = await methods[method](...args, id);
     self.postMessage({ id, result }, transfer || []);
   } catch (error) {
     self.postMessage({ id, error: (error && error.message) || String(error) });

@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { after, before, test } from "node:test";
 
+import { fileURLToPath } from "node:url";
+
 import { startServer } from "./server.mjs";
+import { buildWheel } from "./wheel.mjs";
 
 const { chromium } = createRequire(import.meta.url)("playwright");
 
@@ -240,6 +243,93 @@ test("from a CDN with a one-line service worker file on the site", async () => {
   await datasette.locator('a[href$="/demo/gardens/1"]').first().click();
   await navigated;
   assert.deepEqual(await exercise(page), { ...EXPECTED, registrations: ["/pages/"] });
+  await page.context().close();
+});
+
+test("responses are streamed: through the service worker, and from element.fetch()", async (t) => {
+  await buildWheel(
+    fileURLToPath(new URL("./pages/generated/", import.meta.url)),
+    "datasette-lite-test-stream",
+    fileURLToPath(new URL("../../tests/plugins/datasette_lite_test_stream.py", import.meta.url)),
+  );
+  const page = await openPage(`${site.origin}/pages/stream.html`);
+  await ready(page, "ds");
+  const frame = page.frameLocator("#ds iframe");
+  await frame.locator("footer").waitFor();
+  // The Datasette page itself, inside the element's iframe
+  const datasette = page.frame({ url: /\/app\// });
+  const state = () => page.evaluate(() => document.getElementById("ds").fetch("/-/test-stream-state").then((r) => r.json()));
+
+  // Reads a stream with fetch(), noting when each piece arrived
+  const readStream = (fetchFn) => `(async () => {
+    const started = performance.now();
+    const response = await (${fetchFn})("/-/test-stream?n=3&delay=0.3");
+    const reader = response.body.getReader();
+    const pieces = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pieces.push({ at: performance.now() - started, text: new TextDecoder().decode(value) });
+    }
+    return { type: response.headers.get("content-type"), pieces };
+  })()`;
+  const assertStreamed = (result) => {
+    assert.equal(result.type, "text/event-stream");
+    assert.equal(result.pieces.map((piece) => piece.text).join(""), "data: tick 0\n\ndata: tick 1\n\ndata: tick 2\n\n");
+    // It arrived over time: the first piece well before the last
+    assert.ok(result.pieces.length >= 2, `arrived in ${result.pieces.length} piece(s)`);
+    const first = result.pieces[0].at;
+    const last = result.pieces[result.pieces.length - 1].at;
+    assert.ok(first < 400 && last - first > 400, `first at ${first}ms, last at ${last}ms`);
+  };
+
+  await t.test("a fetch() made by a Datasette page", async () => {
+    // The page's base path, so the request goes through the service worker
+    assertStreamed(await datasette.evaluate(readStream(
+      `(path) => fetch(location.pathname.match(/^.*?\\/app\\/[^/]+/)[0] + path)`,
+    )));
+  });
+
+  await t.test("an EventSource in a Datasette page", async () => {
+    const events = await datasette.evaluate(() => new Promise((resolve, reject) => {
+      const base = location.pathname.match(/^.*?\/app\/[^/]+/)[0];
+      const source = new EventSource(base + "/-/test-stream?n=3&delay=0.2");
+      const received = [];
+      source.onmessage = (event) => {
+        received.push(event.data);
+        if (received.length == 3) {
+          source.close();
+          resolve(received);
+        }
+      };
+      source.onerror = () => reject(new Error("EventSource failed"));
+    }));
+    assert.deepEqual(events, ["tick 0", "tick 1", "tick 2"]);
+  });
+
+  await t.test("element.fetch() from the host page", async () => {
+    assertStreamed(await page.evaluate(readStream(`(path) => document.getElementById("ds").fetch(path)`)));
+  });
+
+  await t.test("aborting a fetch() tells Datasette the client has gone", async () => {
+    const before = await state();
+    await datasette.evaluate(async () => {
+      const base = location.pathname.match(/^.*?\/app\/[^/]+/)[0];
+      const abort = new AbortController();
+      const response = await fetch(base + "/-/test-stream?n=50&delay=0.1", { signal: abort.signal });
+      await response.body.getReader().read();
+      abort.abort();
+    });
+    await page.waitForFunction(
+      (disconnected) =>
+        document.getElementById("ds").fetch("/-/test-stream-state").then((r) => r.json()).then((s) => s.disconnected > disconnected),
+      before.disconnected,
+      { timeout: 10000 },
+    );
+    const after = await state();
+    assert.ok(after.sent - before.sent < 20, `stopped sending, but sent ${after.sent - before.sent} more`);
+  });
+
   await page.context().close();
 });
 

@@ -39,7 +39,7 @@ export interface DatasetteLiteOptions {
   metadata?: string | object;
   /** URL of a datasette.yaml, or the configuration itself */
   config?: string | object;
-  /** Plugins. Ones built into the bundle load offline, others come from PyPI. */
+  /** Plugins. Ones built into the bundle load offline, others come from PyPI. A URL ending in .whl loads that wheel. */
   install?: string[];
   settings?: Record<string, unknown>;
   root?: boolean;

@@ -7,8 +7,12 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { startDatasette } from "../dist/node.js";
+import { buildWheel } from "./wheel.mjs";
 
 const DIST = fileURLToPath(new URL("../dist/", import.meta.url));
+const STREAM_PLUGIN = fileURLToPath(new URL("../../tests/plugins/datasette_lite_test_stream.py", import.meta.url));
+const GENERATED = fileURLToPath(new URL("./pages/generated/", import.meta.url));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Nothing here may use the network: the bundle has to be self-contained
 const realFetch = globalThis.fetch;
@@ -94,4 +98,71 @@ test("serves over HTTP and writes through to a mounted database file", async () 
   assert.equal(db.prepare("select count(*) as n from plants where common_name = 'Kale'").get().n, 1);
   db.close();
   await fs.rm(directory, { recursive: true });
+});
+
+test("streams a response as it is produced, and passes on a disconnect", async () => {
+  // The hosted site's test plugin: /-/test-stream sends server-sent events
+  // some time apart, /-/test-stream-state says what it has seen
+  const wheel = await buildWheel(GENERATED, "datasette-lite-test-stream", STREAM_PLUGIN);
+  const ds = await startDatasette({ install: [wheel] });
+  const state = async () => (await ds.fetch("/-/test-stream-state")).json();
+
+  await test("ds.fetch() returns before the response is complete", async () => {
+    const response = await ds.fetch("/-/test-stream?n=3&delay=0.3");
+    assert.equal(response.headers.get("content-type"), "text/event-stream");
+    // The headers are here, and the stream has two more events to send
+    assert.equal((await state()).finished, 0);
+    const reader = response.body.getReader();
+    const pieces = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pieces.push(new TextDecoder().decode(value));
+    }
+    assert.deepEqual(pieces, ["data: tick 0\n\n", "data: tick 1\n\n", "data: tick 2\n\n"]);
+    assert.deepEqual(await state(), { started: 1, sent: 3, finished: 1, disconnected: 0 });
+  });
+
+  await test("cancelling the body tells Datasette the client has gone", async () => {
+    const response = await ds.fetch("/-/test-stream?n=50&delay=0.1");
+    const reader = response.body.getReader();
+    await reader.read();
+    await reader.cancel();
+    await sleep(400);
+    const after = await state();
+    assert.equal(after.disconnected, 1);
+    assert.ok(after.sent < 3 + 10, `stopped sending, but sent ${after.sent}`);
+  });
+
+  await test("the HTTP server streams too, and notices a dropped connection", async () => {
+    const server = await ds.serve({ port: 0 });
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const before = await state();
+      const started = Date.now();
+      const response = await realFetch(`${origin}/-/test-stream?n=3&delay=0.3`);
+      const reader = response.body.getReader();
+      const first = await reader.read();
+      assert.equal(new TextDecoder().decode(first.value), "data: tick 0\n\n");
+      // The first event arrived long before the 0.9 seconds the stream takes
+      assert.ok(Date.now() - started < 500, `first event took ${Date.now() - started}ms`);
+      let rest = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        rest += new TextDecoder().decode(value);
+      }
+      assert.equal(rest, "data: tick 1\n\ndata: tick 2\n\n");
+
+      const abort = new AbortController();
+      const dropped = await realFetch(`${origin}/-/test-stream?n=50&delay=0.1`, { signal: abort.signal });
+      await dropped.body.getReader().read();
+      abort.abort();
+      await sleep(500);
+      assert.equal((await state()).disconnected, before.disconnected + 1);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
 });

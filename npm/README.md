@@ -188,7 +188,7 @@ bird,2
 | `csv`, `json`, `sql` | URLs to import into the `data` database (`sql` scripts run first) |
 | `metadata`, `config` | URL of a metadata file / `datasette.yaml` |
 | `path` | The Datasette path to show. Setting it navigates. |
-| `install` | Plugins. Ones built into the bundle load offline, others are fetched from PyPI. |
+| `install` | Plugins. Ones built into the bundle load offline, others are fetched from PyPI. A URL ending in `.whl` loads that wheel as it is. |
 | `root` | Sign in as root, which enables Datasette's write UI and API |
 | `memory` | Add the `_memory` database |
 | `hash` | Mirror the path into the page's `#fragment`, so links can be shared and Back works |
@@ -211,6 +211,14 @@ await element.addFile(file);                               // a File from an <in
 const bytes = await element.readDatabase("data");         // the SQLite file, changes included
 element.addEventListener("datasette-navigate", (e) => console.log(e.detail.path, e.detail.title));
 ```
+
+Responses that Datasette sends in pieces - server-sent events, a streaming
+CSV export - arrive as they are produced, both inside the element (so
+`EventSource` and plugins that poll or stream work) and from
+`element.fetch()`, whose `Response` is returned as soon as the response
+starts. Cancelling the body, or aborting a `fetch()` inside the element,
+tells Datasette the client has disconnected. The exception is
+`element.fetch()` in frame mode, which waits for the whole response.
 
 Events: `datasette-ready`, `datasette-error`, `datasette-log`,
 `datasette-navigate`. Shadow parts for styling: `loading`, `error`, `frame`,
@@ -241,6 +249,9 @@ await ds.query("select count(*) from street_trees");
 const server = await ds.serve({ port: 8001 });   // a real Datasette, no Python installed
 ds.pyodide.runPython("import sys; sys.version");  // the interpreter itself
 ```
+
+`ds.fetch()` and `ds.serve()` stream responses as they are produced, and a
+dropped HTTP connection is passed on to Datasette as a disconnect.
 
 `mount: true` opens database files where they are (through Emscripten's
 NODEFS), so writes made through Datasette land in the real file. Startup takes
@@ -277,8 +288,9 @@ system and its shared libraries are loaded. `install="..."` loads a plugin
 from the lock file if it was built in with `--install`, and only falls back
 to micropip and PyPI if it was not.
 
-The ASGI bridge and cookie jar are cut out of `../webworker.js` at build time
-and `sw.js` is copied as it is, so the request path - iframe, service worker,
+The ASGI bridge, the cookie jar and the code that turns a request into a call
+to the bridge (streaming included) are cut out of `../webworker.js` at build
+time and `sw.js` is copied as it is, so the request path - iframe, service worker,
 page, worker, ASGI - is the one the hosted site already tests. What is new is
 `src/runtime.py`: startup that never touches the network, because JavaScript
 has already written every input into Pyodide's file system.

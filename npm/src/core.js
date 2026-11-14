@@ -2,7 +2,7 @@
 // package. No DOM, no worker, no Node APIs: worker.js runs this in a browser
 // Web Worker and node.js runs it directly in Node.
 
-import { BRIDGE_PY, RUNTIME_PY, MANIFEST } from "./python.js";
+import { BRIDGE_PY, RUNTIME_PY, HANDLE_PY, MANIFEST } from "./python.js";
 
 export { MANIFEST };
 
@@ -130,6 +130,12 @@ export async function boot({ loadPyodide, indexURL, readUrl, prepare, log = () =
   const bundled = [];
   const micropip = [];
   for (const requirement of options.install || []) {
+    // A wheel of your own, by URL (or by path in Node): loaded as it is,
+    // without looking for its dependencies
+    if (/\.whl([?#]|$)/.test(requirement)) {
+      bundled.push(requirement);
+      continue;
+    }
     const name = canonical(requirement.split(/[=<>!~ \[;@]/)[0]);
     if (MANIFEST.wheels.includes(name)) bundled.push(name);
     else if (!MANIFEST.packages[name]) micropip.push(requirement);
@@ -144,6 +150,7 @@ export async function boot({ loadPyodide, indexURL, readUrl, prepare, log = () =
 
   await pyodide.runPythonAsync(BRIDGE_PY);
   await pyodide.runPythonAsync(RUNTIME_PY);
+  await pyodide.runPythonAsync(HANDLE_PY);
   const settings = {
     base_url: baseUrl,
     databases,
@@ -160,6 +167,8 @@ export async function boot({ loadPyodide, indexURL, readUrl, prepare, log = () =
   await start(JSON.stringify(settings), log);
   start.destroy();
   const handleRequest = pyodide.globals.get("handle_request");
+  const cancelRequest = pyodide.globals.get("cancel_request");
+  let nextRequest = 1;
   const add = pyodide.globals.get("add");
 
   let added = 0;
@@ -168,11 +177,25 @@ export async function boot({ loadPyodide, indexURL, readUrl, prepare, log = () =
     pyodide,
     baseUrl,
 
-    /** One HTTP request through Datasette's ASGI app */
-    async request({ method = "GET", url, headers = [], body = null }) {
+    /**
+     * One HTTP request through Datasette's ASGI app. Resolves to
+     * {status, headers, body}.
+     *
+     * Pass stream - {onStart(status, headers), onChunk(Uint8Array)} - to be
+     * given a response that Datasette sends in several pieces (server-sent
+     * events, a streaming CSV export) as it is produced. onStart is then
+     * called, followed by onChunk any number of times, and the promise
+     * resolves to {streamed: true} when the response is complete. A response
+     * sent in one piece is returned as usual, without calling either.
+     * stream.id is set straight away: pass it to cancel() to stop reading.
+     */
+    async request({ method = "GET", url, headers = [], body = null }, stream) {
+      const id = nextRequest++;
+      if (stream) stream.id = id;
       const parsed = new URL(url, "http://localhost");
       const port = parsed.port ? parseInt(parsed.port, 10) : parsed.protocol == "https:" ? 443 : 80;
       const result = await handleRequest(
+        id,
         method,
         parsed.pathname,
         parsed.search.replace(/^\?/, ""),
@@ -181,10 +204,22 @@ export async function boot({ loadPyodide, indexURL, readUrl, prepare, log = () =
         parsed.protocol.replace(":", ""),
         parsed.hostname,
         port,
+        !!stream,
+        (status, headersJson) => stream.onStart(status, JSON.parse(headersJson)),
+        // Copied out of the WASM heap, so it can be kept and transferred
+        (chunk) => stream.onChunk(chunk.slice()),
       );
+      if (result.streamed) {
+        return { streamed: true };
+      }
       // Copy the body out of the WASM heap so it can be transferred
       const bytes = result.body ? result.body.slice() : new Uint8Array();
       return { status: result.status, headers: result.headers, body: bytes.buffer };
+    },
+
+    /** Stop a streamed response: Datasette is told the client disconnected */
+    cancel(id) {
+      cancelRequest(id);
     },
 
     /**

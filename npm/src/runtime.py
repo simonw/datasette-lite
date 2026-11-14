@@ -1,6 +1,8 @@
 # The Python side of the datasette-lite npm package. Runs inside Pyodide, after
 # the ASGI bridge (cut out of ../../webworker.js at build time, so ASGIBridge
-# and datasette_base_url_fixes are already defined when this runs).
+# and datasette_base_url_fixes are already defined when this runs) and before
+# that file's handle_request() and cancel_request(), which use the "bridge"
+# global that start() sets here.
 #
 # Unlike the hosted Datasette Lite this never touches the network itself: by
 # the time start() is called every package has been loaded from the bundle and
@@ -338,21 +340,3 @@ async def add(item_json):
     if hasattr(ds, "refresh_schemas"):
         await ds.refresh_schemas()
     return json.dumps({"database": database, "table": table})
-
-
-async def handle_request(method, raw_path, query, headers_json, body_buf, scheme, host, port):
-    from urllib.parse import unquote
-
-    from js import Object
-    from pyodide.ffi import to_js
-
-    headers = json.loads(headers_json)
-    body = b"" if body_buf is None else body_buf.to_py().tobytes()
-    response = await bridge.handle(
-        method, unquote(raw_path), query, headers, body,
-        scheme=scheme, host=host, port=int(port), raw_path=raw_path,
-    )
-    return to_js(
-        {"status": response["status"], "headers": response["headers"], "body": response["body"]},
-        dict_converter=Object.fromEntries,
-    )

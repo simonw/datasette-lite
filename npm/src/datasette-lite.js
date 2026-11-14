@@ -52,9 +52,8 @@ function listenToServiceWorker() {
     if (data.type == "datasette-lite-owner") {
       port.postMessage({ owner: sessions.has(data.session), protocol: PROTOCOL });
     } else if (data.type == "datasette-lite-request" && sessions.has(data.session)) {
-      sessions.get(data.session)._request(data.request).then((response) => {
-        port.postMessage(response, response.body ? [response.body] : []);
-      });
+      // data.stream: this service worker can take the response in pieces
+      sessions.get(data.session)._relay(data.request, port, data.stream);
     }
   });
   navigator.serviceWorker.startMessages();
@@ -181,8 +180,11 @@ export class DatasetteLite extends EventTarget {
         return;
       }
       const call = this._pending.get(data.id);
-      this._pending.delete(data.id);
       if (!call) return;
+      // A response Datasette is sending in pieces - see request() in worker.js
+      if (data.start) return call.onStart && call.onStart(data.start);
+      if (data.chunk) return call.onChunk && call.onChunk(data.chunk);
+      this._pending.delete(data.id);
       if ("error" in data) call.reject(new Error(data.error));
       else call.resolve(data.result);
     };
@@ -208,7 +210,9 @@ export class DatasetteLite extends EventTarget {
       databases, csv, json, sql,
       metadata: document_(options.metadata),
       config: document_(options.config),
-      install: options.install || [],
+      // A wheel given by URL is relative to the page, not to the worker
+      install: (options.install || []).map((requirement) =>
+        /\.whl([?#]|$)/.test(requirement) ? new URL(requirement, document.baseURI).href : requirement),
       settings: options.settings || {},
       memory: !!options.memory,
       root: !!options.root,
@@ -222,16 +226,24 @@ export class DatasetteLite extends EventTarget {
     return this;
   }
 
-  _call(method, args, transfer = []) {
-    return new Promise((resolve, reject) => {
+  // Calls a method in the worker. handlers - {onStart, onChunk} - receive a
+  // response that is streamed. Returns the call's id as well as its promise,
+  // since the id is what "cancel" takes.
+  _send(method, args, transfer = [], handlers = {}) {
+    const id = this._nextId++;
+    const promise = new Promise((resolve, reject) => {
       if (!this._worker) {
         reject(new Error("This Datasette has been stopped"));
         return;
       }
-      const id = this._nextId++;
-      this._pending.set(id, { resolve, reject });
+      this._pending.set(id, { resolve, reject, ...handlers });
       this._worker.postMessage({ id, method, args }, transfer);
     });
+    return { id, promise };
+  }
+
+  _call(method, args, transfer) {
+    return this._send(method, args, transfer).promise;
   }
 
   _failAll(error) {
@@ -239,18 +251,53 @@ export class DatasetteLite extends EventTarget {
     this._pending.clear();
   }
 
-  // One request, as sw.js sends it: {method, url, headers, body}. Always
-  // resolves to {status, headers, body} - sw.js is waiting for an answer.
-  async _request(request) {
+  // Answers one request from sw.js - {method, url, headers, body} - on the
+  // port it is waiting on. The reply is {status, headers, body}; or, when
+  // Datasette sends the response in pieces and sw.js said it can take that,
+  // {status, headers, stream: true}, any number of {chunk} and then
+  // {done: true} or {error}. sw.js sends {cancel: true} if the page stops
+  // reading. Something is always sent: sw.js is waiting for an answer.
+  async _relay(request, port, stream) {
+    let streaming = false;
+    let finished = false;
+    let callId = null;
+    port.onmessage = (event) => {
+      if (event.data && event.data.cancel && !finished && callId !== null) {
+        this._call("cancel", [callId]).catch(() => {});
+      }
+    };
     try {
       await this.ready;
-      return await this._call("request", [request], request.body ? [request.body] : []);
+      const { id, promise } = this._send(
+        "request",
+        [request, !!stream],
+        request.body ? [request.body] : [],
+        {
+          onStart: ({ status, headers }) => {
+            streaming = true;
+            port.postMessage({ status, headers, stream: true });
+          },
+          onChunk: (chunk) => port.postMessage({ chunk }, [chunk]),
+        },
+      );
+      callId = id;
+      const response = await promise;
+      finished = true;
+      if (response.streamed) port.postMessage({ done: true });
+      else port.postMessage(response, response.body ? [response.body] : []);
     } catch (error) {
-      return {
-        status: 500,
-        headers: [["content-type", "text/plain; charset=utf-8"]],
-        body: new TextEncoder().encode("Datasette Lite error: " + error.message).buffer,
-      };
+      finished = true;
+      const message = "Datasette Lite error: " + error.message;
+      if (streaming) {
+        // The status and headers have already gone: break off the response
+        port.postMessage({ error: message });
+        return;
+      }
+      const body = new TextEncoder().encode(message).buffer;
+      port.postMessage(
+        { status: 500, headers: [["content-type", "text/plain; charset=utf-8"]], body },
+        [body],
+      );
     }
   }
 
@@ -270,14 +317,46 @@ export class DatasetteLite extends EventTarget {
     const request = new Request(url, init);
     const hasBody = !["GET", "HEAD"].includes(request.method);
     const body = hasBody ? await request.arrayBuffer() : null;
-    const response = await this._call(
-      "request",
-      [{ method: request.method, url: request.url, headers: [...request.headers.entries()], body }],
-      body ? [body] : [],
-    );
-    return new Response(NULL_BODY.has(response.status) ? null : response.body, {
-      status: response.status,
-      headers: response.headers,
+    return new Promise((resolve, reject) => {
+      // Set if Datasette sends the response in pieces: the Response is then
+      // returned as soon as it starts, with a body that can be read as it
+      // arrives - server-sent events, a streaming CSV export
+      let controller = null;
+      let cancelled = false;
+      const { id, promise } = this._send(
+        "request",
+        [{ method: request.method, url: request.url, headers: [...request.headers.entries()], body }, true],
+        body ? [body] : [],
+        {
+          onStart: ({ status, headers }) => {
+            const stream = new ReadableStream({
+              start: (streamController) => {
+                controller = streamController;
+              },
+              // The caller stopped reading: tell Datasette the client has gone
+              cancel: () => {
+                cancelled = true;
+                this._call("cancel", [id]).catch(() => {});
+              },
+            });
+            resolve(new Response(stream, { status, headers }));
+          },
+          onChunk: (chunk) => cancelled || controller.enqueue(new Uint8Array(chunk)),
+        },
+      );
+      promise.then((response) => {
+        if (response.streamed) {
+          if (!cancelled) controller.close();
+        } else {
+          resolve(new Response(NULL_BODY.has(response.status) ? null : response.body, {
+            status: response.status,
+            headers: response.headers,
+          }));
+        }
+      }, (error) => {
+        if (!controller) reject(error);
+        else if (!cancelled) controller.error(error);
+      });
     });
   }
 
@@ -364,6 +443,8 @@ async function fetchBytes(url) {
 async function frameOptions(options) {
   const result = { ...options };
   delete result.assets;
+  result.install = (options.install || []).map((requirement) =>
+    /\.whl([?#]|$)/.test(requirement) ? new URL(requirement, document.baseURI).href : requirement);
   for (const kind of ["databases", "csv", "json", "sql"]) {
     result[kind] = await Promise.all((options[kind] || []).map(async (item) => {
       const source = await normalizeSource(item);
