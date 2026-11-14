@@ -7,6 +7,10 @@ is all it takes to run Datasette with no network access at all.
 
 It is a working prototype, not a published package (`"private": true`).
 
+**This branch runs Python 3.14** (Pyodide 314.0.8). The main prototype branch
+uses Python 3.12 (Pyodide 0.27.2) to match the hosted site. See "Python 3.14"
+below for what had to change.
+
 What is here:
 
 - **A build step** that resolves Datasette's dependencies once, ahead of time, and writes a self-contained `dist/`.
@@ -29,13 +33,13 @@ npm test             # needs Playwright and its Chromium to be resolvable
 The build output:
 
 ```
-Datasette 1.0a42 on Python 3.12.7 (Pyodide 0.27.2)
-33 packages in site-packages.tar.xz: 3.9 MB
-3 wheels loaded on demand: 0.6 MB (packaging, micropip, lzma)
-dist/ is 17.7 MB - offline self-test passed
+Datasette 1.0a42 on Python 3.14.2 (Pyodide 314.0.8)
+29 packages in site-packages.tar.xz: 2.8 MB
+1 wheels loaded on demand: 0.1 MB (micropip)
+dist/ is 15.8 MB - offline self-test passed
 ```
 
-`npm pack` turns that into a **10.1 MB tarball with no dependencies**.
+`npm pack` turns that into a **9.5 MB tarball with no dependencies**.
 
 ## From a CDN
 
@@ -95,25 +99,32 @@ file and the packages can never come from a newer release than the code.
 
 ### Page weight
 
-What a browser downloads to get from nothing to a rendered table, measured
-from the request log of a real page load (13 requests):
+What a browser downloads to get from nothing to a rendered table (12
+requests):
 
 | | raw | jsDelivr | unpkg |
 | --- | --- | --- | --- |
-| `pyodide.asm.wasm` (CPython) | 10.10 | 2.27 | 3.14 |
-| `site-packages.tar.xz` (Datasette + 32 packages) | 4.10 | 4.10 | 4.10 |
-| `python_stdlib.zip` | 2.36 | 2.36 | 2.36 |
-| `pyodide.asm.js` | 1.25 | 0.20 | 0.24 |
-| `lzma` wheel | 0.22 | 0.06 | 0.22 |
-| our JavaScript, lock file, `frame.html`, `sw.js` | 0.10 | 0.03 | 0.03 |
-| **Total, MB** | **18.1** | **9.0** | **10.1** |
+| `pyodide.asm.wasm` (CPython 3.14) | 9.60 | 3.44 | 3.53 |
+| `site-packages.tar.xz` (Datasette + 28 packages) | 2.94 | 2.94 | 2.94 |
+| `python_stdlib.zip` | 2.55 | 2.55 | 2.55 |
+| `pyodide.asm.mjs` | 1.25 | 0.26 | 0.26 |
+| our JavaScript, lock file, `frame.html`, `sw.js` | 0.10 | 0.04 | 0.04 |
+| **Total, MB** | **16.4** | **9.2** | **9.3** |
 
-The two CDNs differ because they compress different things. I checked with
-real requests: jsDelivr applies Brotli to JavaScript, WebAssembly and
-unknown binary types; unpkg applies gzip to JavaScript and WebAssembly only;
-neither touches a `.zip`. The wasm and `pyodide.asm.js` figures are the
-`content-length` those CDNs return for Pyodide 0.27.2 today. On your own
-server with gzip on everything it is 9.9 MB.
+The wasm, `pyodide.asm.mjs` and stdlib figures are what those CDNs return
+for Pyodide 314.0.8 today. jsDelivr applies Brotli to JavaScript, WebAssembly
+and unknown binary types; unpkg applies gzip to JavaScript and WebAssembly
+only; neither touches a `.zip`.
+
+On Python 3.12 the same table came to 9.0 MB (jsDelivr) and 10.1 MB (unpkg).
+The archive is 1.2 MB smaller here, because `ssl`, `sqlite3`, `hashlib` and
+OpenSSL are now part of the runtime instead of separate packages. On jsDelivr
+that is cancelled out by the wasm: it serves the 0.27.2 file at 2.27 MB and
+this slightly smaller one at 3.44 MB. I don't know why; it may compress
+files harder once they are popular.
+
+The figures in the rest of this section were measured on the Python 3.12
+build and have not been repeated here.
 
 That difference is why the packages are one archive. The first version of
 this prototype shipped 37 separate wheels, which is the obvious design and
@@ -232,7 +243,7 @@ const server = await ds.serve({ port: 8001 });   // a real Datasette, no Python 
 
 `mount: true` opens database files where they are (through Emscripten's
 NODEFS), so writes made through Datasette land in the real file. Startup takes
-four to five seconds.
+about four and a half seconds.
 
 ## How it works
 
@@ -256,7 +267,7 @@ dist/
   core.js             boots Pyodide + Datasette; shared by both
   python.js           the Python source + manifest, generated
   sw.js               ../sw.js, unchanged
-  pyodide/            pyodide.asm.wasm, python_stdlib.zip, site-packages.tar.xz,
+  pyodide/            pyodide.asm.mjs, pyodide.asm.wasm, python_stdlib.zip, site-packages.tar.xz,
                       pyodide-lock.json + the wheels it lists
 ```
 
@@ -282,6 +293,33 @@ node build/build.mjs --full                       # keep pip, uvicorn and hupper
 node build/build.mjs --out some/dir
 ```
 
+## Python 3.14
+
+Datasette 1.0a42 and all of its dependencies run on Python 3.14.2 under
+Pyodide 314.0.8: the build's offline self-test and all 13 Node and browser
+tests pass, as does loading a plugin built into the bundle. Nothing in
+Datasette or in the JavaScript had to change. What did, all in the build:
+
+- **The standard library is whole again.** Pyodide 0.27 shipped `ssl`,
+  `sqlite3`, `hashlib`, `lzma` and `decimal` as separate packages, and the
+  build asked for them by name. They are built in now, so the build only asks
+  for the ones the lock file lists. `lzma` being built in also means there is
+  no wheel to load before the archive can be opened.
+- **`micropip` no longer depends on `packaging`.** The build's resolver
+  script uses `packaging`, so it is loaded explicitly.
+- **The Emscripten glue is `pyodide.asm.mjs`**, an ES module, where it was
+  `pyodide.asm.js`. The build copies whichever exists, and the CommonJS
+  `package.json` workaround is only written for the old one.
+- **Pyodide's CDN fallback in Node works** in this release, and reports
+  through `stdout` rather than `console.log`.
+
+The private `pyodide._api.loadDynlib` call that loads the archive's compiled
+modules (`pydantic_core`, `PyYAML`, `MarkupSafe`) still works unchanged.
+
+The build now handles both Pyodide layouts, so the same script builds either
+by changing the `pyodide` version in `package.json`. Python 3.15 exists only
+as a Pyodide alpha (`315.0.0-alpha.2`) and I have not tried it.
+
 ## What the prototype found
 
 **It works, and the hard part was already done.** The service worker
@@ -305,20 +343,22 @@ just a packaging detail:
   but it crashes on exactly that duplicate, so `build/resolve.py` reads the
   installed distributions itself.
 
-**Size** is covered under "Page weight" above: 17.7 MB on disk, 10.1 MB as
-an npm tarball, 9 to 10 MB over the wire.
+**Size** is covered under "Page weight" above: 15.8 MB on disk, 9.5 MB as
+an npm tarball, a little over 9 MB over the wire.
 
 **Things that needed care**, each now handled:
 
-- `pyodide.asm.js` is CommonJS. Inside a `"type": "module"` package Node
-  refuses to load it, so the build writes a `package.json` into `dist/pyodide/`.
+- On Pyodide 0.27 `pyodide.asm.js` is CommonJS. Inside a `"type": "module"`
+  package Node refuses to load it, so the build writes a `package.json` into
+  `dist/pyodide/`.
 - `navigator.serviceWorker.ready` never resolves for a page outside the scope;
   the element waits for the registration's worker to activate instead.
 - `sw.js` treats the first reply from a page as that page's answer, so one
   listener per page answers for all the elements on it.
 - Pyodide 0.27.2 in Node cannot fetch missing packages from its CDN while
   `loadPyodide` is still running (its CDN URL is not set yet), so the build
-  loads the extra standard library modules by name afterwards.
+  loads the extra standard library modules by name afterwards. (Not needed
+  on Pyodide 314.)
 - A Node `Buffer` is a `Uint8Array` that Pyodide refuses to convert.
 - Unpacking an archive is not enough for packages with compiled modules
   (`_ssl`, `_sqlite3`, `pydantic_core`): Pyodide has to load each `.so` before
@@ -352,20 +392,18 @@ an npm tarball, 9 to 10 MB over the wire.
 - **`serve` shares one cookie jar** between all clients, because the bridge
   keeps cookies itself (a service worker cannot set them). Fine for a local
   tool; a real multi-user server would pass cookies through instead.
-- **Faster startup.** Of the four seconds in Node, about 1.3 are Pyodide, 0.7
-  unpacking wheels and 2 importing and starting Datasette. A memory snapshot
+- **Faster startup.** Of the four and a half seconds in Node, roughly one is
+  Pyodide, one unpacking the archive and two importing and starting Datasette. A memory snapshot
   taken at build time would skip most of that; Pyodide's snapshot support is
   still experimental.
 - **Persistence in the browser**, by keeping databases in OPFS.
-- **A newer Pyodide.** This uses 0.27.2 to match the hosted site. Current
-  releases are numbered 314.x after the Python version they ship.
 - Only checked in Chromium. Module workers and service workers are in Firefox
   and Safari too, but I have not run them.
 - **Nothing has been fetched from a real CDN**, since the package is not
   published. The CDN modes are tested against a second local origin that
   sends CORS headers, and the CDN behaviour they rely on was checked against
   other packages' files on jsDelivr and unpkg.
-- `dist/` is not committed (18 MB of binaries). Publishing would be
+- `dist/` is not committed (16 MB of binaries). Publishing would be
   `npm run build && npm publish` from CI, after dropping `"private"`.
 - Hardcoded `/-/...` URLs that escape `base_url` are rewritten in HTML as on
   the hosted site, but the service worker fallback for ones added by plugin

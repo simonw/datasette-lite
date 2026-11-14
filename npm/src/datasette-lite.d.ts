@@ -3,6 +3,7 @@ export interface Manifest {
   pyodide: string;
   python: string;
   archive: { file: string; size: number; sha256: string; dynlibs: Array<{ path: string; global: boolean }> };
+  load: string[];
   wheels: string[];
   packages: Record<string, string>;
 }

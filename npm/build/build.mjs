@@ -62,11 +62,11 @@ const requirements = [
   "sqlite-utils",
   ...options.install,
 ];
-// Loaded from the Pyodide distribution before anything is resolved. The
-// cpython_module ones are parts of the standard library that Pyodide ships
-// separately ("fullStdLib"), minus the CPython test suite.
+// Loaded from the Pyodide distribution before anything is resolved. Up to
+// Pyodide 0.27 parts of the standard library (ssl, sqlite3, hashlib, lzma...)
+// were separate packages; from 0.28 they are built in, and are skipped here.
 const PYODIDE_PACKAGES = [
-  "micropip", "setuptools", "ssl", "sqlite3", "hashlib", "lzma", "pydecimal",
+  "micropip", "packaging", "setuptools", "ssl", "sqlite3", "hashlib", "lzma", "pydecimal",
 ];
 
 const DIST = options.out;
@@ -78,6 +78,7 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const { loadPyodide, version: pyodideVersion } = await import(
   pathToFileURL(path.join(PYODIDE_DIR, "pyodide.mjs"))
 );
+const upstreamLock = JSON.parse(await fs.readFile(path.join(PYODIDE_DIR, "pyodide-lock.json"), "utf8"));
 const cacheDir = path.join(ROOT, ".cache", `pyodide-${pyodideVersion}`);
 await fs.mkdir(cacheDir, { recursive: true });
 
@@ -88,8 +89,8 @@ const consoleLog = console.log;
 console.log = () => {};
 let resolver, installed;
 try {
-  resolver = await loadPyodide({ packageCacheDir: cacheDir });
-  await resolver.loadPackage(PYODIDE_PACKAGES, quiet);
+  resolver = await loadPyodide({ packageCacheDir: cacheDir, stdout() {}, stderr: console.error });
+  await resolver.loadPackage(PYODIDE_PACKAGES.filter((name) => upstreamLock.packages[name]), quiet);
   resolver.globals.set("requirements_json", JSON.stringify(requirements));
   resolver.globals.set("pre", !options.stable && !options.datasette);
   installed = JSON.parse(
@@ -101,7 +102,6 @@ try {
 
 // --- 2. A lock file for exactly what was installed -----------------------------
 
-const upstreamLock = JSON.parse(await fs.readFile(path.join(PYODIDE_DIR, "pyodide-lock.json"), "utf8"));
 const canonical = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");
 const upstreamByName = new Map(
   Object.entries(upstreamLock.packages).map(([key, entry]) => [canonical(entry.name), { key, entry }]),
@@ -194,7 +194,9 @@ await fs.rm(DIST, { recursive: true, force: true });
 const distPyodide = path.join(DIST, "pyodide");
 await fs.mkdir(distPyodide, { recursive: true });
 
-for (const name of ["pyodide.mjs", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip"]) {
+// The Emscripten glue is pyodide.asm.js up to Pyodide 0.28, pyodide.asm.mjs after
+const glue = await fs.access(path.join(PYODIDE_DIR, "pyodide.asm.mjs")).then(() => "pyodide.asm.mjs", () => "pyodide.asm.js");
+for (const name of ["pyodide.mjs", glue, "pyodide.asm.wasm", "python_stdlib.zip"]) {
   await fs.copyFile(path.join(PYODIDE_DIR, name), path.join(distPyodide, name));
 }
 const kept = new Set(Object.values(packages).map((entry) => entry.file_name));
@@ -262,8 +264,10 @@ const manifest = {
     // Shared libraries have to be loaded by Pyodide before they are imported
     dynlibs: archive.dynlibs,
   },
-  // Separate wheels, loaded by name through pyodide-lock.json: lzma at
-  // startup, the rest only if install asks for them
+  // Separate wheels, loaded by name through pyodide-lock.json. "load" are the
+  // ones needed at startup - lzma, where Pyodide ships it separately - and
+  // the rest are only loaded if install asks for them
+  load: ["lzma"].filter((name) => lock.packages[name]),
   wheels: Object.keys(lock.packages).sort(),
   packages: Object.fromEntries(
     Object.entries(packages).map(([key, entry]) => [key, entry.version]).sort(),
@@ -286,9 +290,11 @@ for (const name of ["core.js", "worker.js", "datasette-lite.js", "node.js", "dat
 await fs.copyFile(path.join(REPO, "sw.js"), path.join(DIST, "sw.js"));
 await fs.copyFile(path.join(ROOT, "src", "demo.html"), path.join(DIST, "index.html"));
 
-// pyodide.asm.js is CommonJS. Without this Node would read it as an ES module
-// whenever the nearest package.json above it says "type": "module".
-await fs.writeFile(path.join(distPyodide, "package.json"), '{"type": "commonjs"}\n');
+if (glue == "pyodide.asm.js") {
+  // pyodide.asm.js is CommonJS. Without this Node would read it as an ES
+  // module whenever the nearest package.json above it says "type": "module".
+  await fs.writeFile(path.join(distPyodide, "package.json"), '{"type": "commonjs"}\n');
+}
 
 // --- 4. Prove it works offline -------------------------------------------------
 

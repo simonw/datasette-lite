@@ -118,7 +118,7 @@ export async function boot({ loadPyodide, indexURL, readUrl, prepare, log = () =
 
   // The base packages - Datasette and everything it needs - are one archive
   log(`Loading Datasette ${MANIFEST.datasette}`);
-  await pyodide.loadPackage(["lzma"], packageLog);
+  if (MANIFEST.load.length) await pyodide.loadPackage(MANIFEST.load, packageLog);
   pyodide.FS.writeFile(ARCHIVE_PATH, await archive);
   pyodide.runPython(UNPACK_PY);
   for (const lib of MANIFEST.archive.dynlibs) {
