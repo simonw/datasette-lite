@@ -7,9 +7,9 @@ is all it takes to run Datasette with no network access at all.
 
 It is a working prototype, not a published package (`"private": true`).
 
-**This branch runs Python 3.14** (Pyodide 314.0.8). The main prototype branch
-uses Python 3.12 (Pyodide 0.27.2) to match the hosted site. See "Python 3.14"
-below for what had to change.
+It runs **Python 3.14** (Pyodide 314.0.8). The hosted site is still on
+Python 3.12 (Pyodide 0.27.2), which is what this prototype used at first; see
+"Python 3.14" below for what had to change.
 
 What is here:
 
@@ -316,8 +316,8 @@ Datasette or in the JavaScript had to change. What did, all in the build:
 The private `pyodide._api.loadDynlib` call that loads the archive's compiled
 modules (`pydantic_core`, `PyYAML`, `MarkupSafe`) still works unchanged.
 
-The build now handles both Pyodide layouts, so the same script builds either
-by changing the `pyodide` version in `package.json`. Python 3.15 exists only
+The build handles both Pyodide layouts, so going back to Python 3.12 is a
+matter of setting the `pyodide` version in `package.json` to `0.27.2`. Python 3.15 exists only
 as a Pyodide alpha (`315.0.0-alpha.2`) and I have not tried it.
 
 ## What the prototype found
