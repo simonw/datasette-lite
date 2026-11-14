@@ -239,6 +239,7 @@ import { startDatasette } from "datasette-lite/node";
 const ds = await startDatasette({ databases: ["trees.db"], mount: true, root: true });
 await ds.query("select count(*) from street_trees");
 const server = await ds.serve({ port: 8001 });   // a real Datasette, no Python installed
+ds.pyodide.runPython("import sys; sys.version");  // the interpreter itself
 ```
 
 `mount: true` opens database files where they are (through Emscripten's
@@ -312,6 +313,19 @@ Datasette or in the JavaScript had to change. What did, all in the build:
   `package.json` workaround is only written for the old one.
 - **Pyodide's CDN fallback in Node works** in this release, and reports
   through `stdout` rather than `console.log`.
+
+Two things Pyodide 314 changed need working around at run time, as they do
+on the hosted site:
+
+- **Pyodide is built without OpenSSL.** `ssl` is a stub and `hashlib` has no
+  `pbkdf2_hmac`, which datasette-auth-passwords needs. `runtime.py` adds the
+  pure Python implementation CPython used to fall back to. Other
+  OpenSSL-backed functions, `hashlib.scrypt` for one, are simply absent.
+- **Pyodide's own starlette package declares no dependencies**, so a plugin
+  that needs it (datasette-upload-csvs) was installed without anyio. The
+  build checks what it installed against each package's metadata, adds what
+  is missing and records the real dependencies in the lock file; the same
+  check runs after a plugin is installed from PyPI at run time.
 
 The private `pyodide._api.loadDynlib` call that loads the archive's compiled
 modules (`pydantic_core`, `PyYAML`, `MarkupSafe`) still works unchanged.

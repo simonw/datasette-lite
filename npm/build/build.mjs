@@ -87,17 +87,20 @@ const quiet = { messageCallback() {}, errorCallback: console.error };
 // Pyodide prints a line for every package it has to fetch from its CDN
 const consoleLog = console.log;
 console.log = () => {};
-let resolver, installed;
+let resolver, installed, repaired;
 try {
   resolver = await loadPyodide({ packageCacheDir: cacheDir, stdout() {}, stderr: console.error });
   await resolver.loadPackage(PYODIDE_PACKAGES.filter((name) => upstreamLock.packages[name]), quiet);
   resolver.globals.set("requirements_json", JSON.stringify(requirements));
   resolver.globals.set("pre", !options.stable && !options.datasette);
-  installed = JSON.parse(
+  ({ installed, repaired } = JSON.parse(
     await resolver.runPythonAsync(await fs.readFile(path.join(ROOT, "build", "resolve.py"), "utf8")),
-  );
+  ));
 } finally {
   console.log = consoleLog;
+}
+if (repaired.length) {
+  log(`Added dependencies that Pyodide's own packages need but do not declare: ${repaired.join(", ")}`);
 }
 
 // --- 2. A lock file for exactly what was installed -----------------------------
@@ -122,7 +125,13 @@ for (const name of Object.keys(resolver.loadedPackages)) {
   const upstream = upstreamByName.get(canonical(name));
   if (!upstream) throw new Error(`${name} is not in pyodide-lock.json`);
   if (pypiNames.has(canonical(name)) || excluded.has(canonical(name))) continue;
-  packages[upstream.key] = upstream.entry;
+  // Pyodide's lock file does not always list a package's dependencies
+  // (starlette has none, yet needs anyio), so add what its metadata says
+  const dist = installed.find((item) => canonical(item.name) == canonical(name));
+  packages[upstream.key] = {
+    ...upstream.entry,
+    depends: [...upstream.entry.depends, ...(dist ? dist.requires : [])],
+  };
   files.push({
     fileName: upstream.entry.file_name,
     from: path.join(cacheDir, upstream.entry.file_name),

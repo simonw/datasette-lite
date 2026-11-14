@@ -19,6 +19,58 @@ os.link = os.symlink
 if not hasattr(os, "geteuid"):
     os.geteuid = os.getuid
 
+# Pyodide is built without OpenSSL, so hashlib lacks the functions OpenSSL
+# provides. datasette-auth-passwords (and anything else that hashes passwords
+# the standard way) needs pbkdf2_hmac: this is the pure Python implementation
+# CPython itself shipped as a fallback until Python 3.12.
+import hashlib  # noqa: E402
+if not hasattr(hashlib, "pbkdf2_hmac"):
+    _trans_5C = bytes((x ^ 0x5C) for x in range(256))
+    _trans_36 = bytes((x ^ 0x36) for x in range(256))
+
+    def _pbkdf2_hmac(hash_name, password, salt, iterations, dklen=None):
+        if not isinstance(hash_name, str):
+            raise TypeError(hash_name)
+        if not isinstance(password, (bytes, bytearray)):
+            password = bytes(memoryview(password))
+        if not isinstance(salt, (bytes, bytearray)):
+            salt = bytes(memoryview(salt))
+        inner = hashlib.new(hash_name)
+        outer = hashlib.new(hash_name)
+        blocksize = getattr(inner, "block_size", 64)
+        if len(password) > blocksize:
+            password = hashlib.new(hash_name, password).digest()
+        password = password + b"\x00" * (blocksize - len(password))
+        inner.update(password.translate(_trans_36))
+        outer.update(password.translate(_trans_5C))
+
+        def prf(msg, inner=inner, outer=outer):
+            icpy = inner.copy()
+            ocpy = outer.copy()
+            icpy.update(msg)
+            ocpy.update(icpy.digest())
+            return ocpy.digest()
+
+        if iterations < 1:
+            raise ValueError(iterations)
+        if dklen is None:
+            dklen = outer.digest_size
+        if dklen < 1:
+            raise ValueError(dklen)
+        dkey = b""
+        loop = 1
+        while len(dkey) < dklen:
+            prev = prf(salt + loop.to_bytes(4, "big"))
+            rkey = int.from_bytes(prev, "big")
+            for _ in range(iterations - 1):
+                prev = prf(prev)
+                rkey ^= int.from_bytes(prev, "big")
+            loop += 1
+            dkey += rkey.to_bytes(inner.digest_size, "big")
+        return dkey[:dklen]
+
+    hashlib.pbkdf2_hmac = _pbkdf2_hmac
+
 # Increase CSV field size limit to the maximum possible
 # https://stackoverflow.com/a/15063941
 _field_size_limit = sys.maxsize
@@ -137,6 +189,52 @@ async def _micropip_install(requirement, pre):
     await micropip.install(requirement, pre=pre)
 
 
+async def _install_missing_requirements():
+    """Some packages built into the Pyodide distribution do not list their
+    dependencies - starlette lists none, so a plugin that needs starlette gets
+    it without anyio and fails on import. micropip trusts that list, so check
+    what is installed against each package's own metadata and install
+    anything that is missing. build/resolve.py does the same for plugins that
+    are built into the bundle."""
+    import re
+    from importlib.metadata import distributions
+
+    import micropip
+
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        try:
+            # micropip carries its own copy
+            from micropip._vendored.packaging.src.packaging.requirements import Requirement
+        except ImportError:
+            return
+
+    def normalize(name):
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    # A fix can itself bring in a package with the same problem
+    for _ in range(3):
+        installed = {normalize(dist.metadata["Name"]) for dist in distributions()}
+        missing = set()
+        for dist in distributions():
+            for line in dist.requires or []:
+                requirement = Requirement(line)
+                # Skips optional extras, and requirements for other platforms
+                if requirement.marker and not requirement.marker.evaluate({"extra": ""}):
+                    continue
+                if normalize(requirement.name) not in installed:
+                    missing.add(requirement.name)
+        if not missing:
+            return
+        for name in sorted(missing):
+            try:
+                await micropip.install(name)
+            except Exception:
+                # Not installable here - leave it to fail where it is used
+                pass
+
+
 async def start(settings_json, log):
     global ds, bridge, _base_url
     settings = json.loads(settings_json)
@@ -145,6 +243,8 @@ async def start(settings_json, log):
     for requirement in settings["micropip"]:
         log("Installing {} from PyPI...".format(requirement))
         await _micropip_install(requirement, settings["pre"])
+    if settings["micropip"]:
+        await _install_missing_requirements()
 
     names = []
     for item in settings["databases"]:

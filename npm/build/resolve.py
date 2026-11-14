@@ -24,6 +24,30 @@ for requirement in json.loads(requirements_json):
         await micropip.install(requirement, pre=pre)
 
 
+def missing_requirements():
+    installed = {canonicalize_name(dist.metadata["Name"]) for dist in importlib.metadata.distributions()}
+    missing = set()
+    for dist in importlib.metadata.distributions():
+        for line in dist.requires or []:
+            requirement = Requirement(line)
+            if requirement.marker and not requirement.marker.evaluate({"extra": ""}):
+                continue
+            if canonicalize_name(requirement.name) not in installed:
+                missing.add(requirement.name)
+    return sorted(missing)
+
+
+# Some packages built into the Pyodide distribution do not list their
+# dependencies (starlette lists none, so a plugin that needs it is installed
+# without anyio). micropip trusts that list, so check against each package's
+# own metadata. Repeated, as a fix can bring in a package with the same problem.
+repaired = []
+for _ in range(3):
+    for name in missing_requirements():
+        await micropip.install(name)
+        repaired.append(name)
+
+
 def top_level_imports(dist):
     names = set()
     for file in dist.files or []:
@@ -64,4 +88,4 @@ for dist in importlib.metadata.distributions():
         }
     )
 
-json.dumps(installed)
+json.dumps({"installed": installed, "repaired": repaired})

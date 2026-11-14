@@ -43,6 +43,12 @@ test("imports inline SQL, CSV and JSON, and answers queries", async () => {
   assert.match(await home.text(), /From Node/);
   const versions = await (await ds.fetch("/-/versions.json")).json();
   assert.equal(versions.datasette.version, ds.manifest.datasette);
+  // Pyodide has no OpenSSL, so hashlib.pbkdf2_hmac is our pure Python one:
+  // check it against the known answer for this input
+  assert.equal(
+    ds.pyodide.runPython('import hashlib; hashlib.pbkdf2_hmac("sha256", b"password", b"salt", 4096, 32).hex()'),
+    "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a",
+  );
   // Static assets come out of the wheel
   assert.equal((await ds.fetch("/-/static/app.css")).status, 200);
 });

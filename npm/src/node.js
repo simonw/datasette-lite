@@ -69,6 +69,8 @@ export async function startDatasette(options = {}) {
 
   const ds = {
     manifest: MANIFEST,
+    /** The Pyodide instance, for running Python of your own */
+    pyodide: runtime.pyodide,
     request: runtime.request,
     add: runtime.add,
     readDatabase: runtime.readDatabase,
