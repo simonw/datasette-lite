@@ -73,17 +73,98 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
-// Each line the worker reports becomes a step on the loading screen: the last
-// one in the list is the step in progress, the ones above it are finished
-function log(line) {
-  const steps = document.getElementById("loading-logs");
-  const step = document.createElement("li");
-  step.textContent = line;
-  steps.appendChild(step);
-  steps.scrollTop = steps.scrollHeight;
+// --- The loading screen ----------------------------------------------------------
+
+// The worker reports each step of starting up - see "Startup progress" in
+// webworker.js. Several are in progress at once: each is listed with a
+// spinner until the worker says it is done, then a tick. Next to it is how
+// long it has taken and, for a download, how much has arrived.
+const steps = new Map(); // id -> {item, label, detail, started, finished, bytes}
+
+function formatBytes(bytes) {
+  if (bytes < 1000) {
+    return bytes + " B";
+  }
+  if (bytes < 1000 * 1000) {
+    return Math.round(bytes / 1000) + " kB";
+  }
+  return (bytes / (1000 * 1000)).toFixed(1) + " MB";
 }
 
+function showStepDetail(step) {
+  const seconds = ((step.finished || performance.now()) - step.started) / 1000;
+  const parts = [];
+  if (step.bytes != null) {
+    parts.push(formatBytes(step.bytes));
+  }
+  if (step.finished) {
+    // Not worth saying of a step that took no time at all
+    if (seconds >= 0.05) {
+      parts.push(seconds.toFixed(1) + " s");
+    }
+  } else if (seconds >= 1) {
+    parts.push(Math.floor(seconds) + " s");
+  }
+  const text = parts.join(" \u00b7 ");
+  if (step.detail.textContent != text) {
+    step.detail.textContent = text;
+  }
+}
+
+// Show a new step, or change one already shown: {id, label, bytes, done}
+function showStep({id, label, bytes, done}) {
+  let step = steps.get(id);
+  if (!step) {
+    const list = document.getElementById("loading-logs");
+    const item = document.createElement("li");
+    step = {
+      item,
+      label: document.createElement("span"),
+      detail: document.createElement("span"),
+      started: performance.now(),
+    };
+    step.label.className = "step-label";
+    step.detail.className = "step-detail";
+    // The times tick: not something for a screen reader to read out
+    step.detail.setAttribute("aria-hidden", "true");
+    item.append(step.label, step.detail);
+    list.appendChild(item);
+    list.scrollTop = list.scrollHeight;
+    steps.set(id, step);
+  }
+  if (label != null) {
+    step.label.textContent = label;
+  }
+  if (bytes != null) {
+    step.bytes = bytes;
+  }
+  if (done && !step.finished) {
+    step.finished = performance.now();
+    step.item.classList.add("done");
+  }
+  showStepDetail(step);
+}
+
+// The step the page is served showing, which the worker finishes as "pyodide"
+{
+  const item = document.querySelector("#loading-logs li");
+  steps.set("pyodide", {
+    item,
+    label: item.querySelector(".step-label"),
+    detail: item.querySelector(".step-detail"),
+    started: performance.now(),
+  });
+}
+
+// Keeps the time shown against each step in progress up to date
+const stepTimer = setInterval(() => {
+  for (const step of steps.values()) {
+    step.finished || showStepDetail(step);
+  }
+}, 250);
+
 function showError(message) {
+  clearInterval(stepTimer);
   document.getElementById("loading-indicator").style.display = "none";
   // An error raised by Python arrives as a whole traceback. Its last line says
   // what went wrong, so lead with that and keep the rest a click away.
@@ -109,8 +190,8 @@ const workerReady = new Promise((resolve, reject) => {
   failWorkerStartup = reject;
   datasetteWorker.onmessage = (event) => {
     const data = event.data;
-    if (data.type == "log") {
-      log(data.line);
+    if (data.type == "step") {
+      showStep(data);
     } else if (data.type == "ready") {
       resolve();
     } else if (data.type == "error") {
@@ -520,6 +601,7 @@ async function main() {
   await Promise.all([registerServiceWorker(), workerReady]);
   navigateFrame(pathFromHash(), false);
   document.body.classList.add("ready");
+  clearInterval(stepTimer);
 }
 
 main().catch((error) => showError((error && error.message) || String(error)));

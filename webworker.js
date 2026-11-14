@@ -24,24 +24,112 @@ const DATASETTE_REPO = "simonw/datasette";
 // delay self.onmessage being set until after the shell's "startup" message
 // had arrived, and the message would be lost.
 
-function log(line) {
-  console.log({line});
-  self.postMessage({type: 'log', line: line});
-}
-// The startup Python calls this with "from js import log". A function
-// declared in a module is not a global, so make it one.
-self.log = log;
+// --- Startup progress ----------------------------------------------------------
+//
+// Starting up is a number of steps, several of which are in progress at the
+// same time: files download while Pyodide loads and packages are installed.
+// The shell shows each step on the loading screen, with a spinner until it is
+// told the step is done. A step is {id, label}; later messages with the same
+// id change its label, report the bytes downloaded so far, or finish it.
 
-// Pyodide reports several lines for each package it loads ("Loading x",
-// "Loaded x", "No new packages to load"). Only the first is a step worth
-// showing on the loading screen; the rest still go to the console.
-function logPackageLoading(line) {
-  if (line.startsWith("Loading ")) {
-    log(line);
-  } else {
-    console.log({line});
+let stepCount = 0;
+
+function startStep(label, id) {
+  id = id || `step-${++stepCount}`;
+  console.log({step: label});
+  self.postMessage({type: 'step', id, label});
+  return id;
+}
+
+function updateStep(id, changes) {
+  self.postMessage({type: 'step', id, ...changes});
+}
+
+function finishStep(id, changes) {
+  self.postMessage({type: 'step', id, done: true, ...changes});
+}
+
+// The startup Python calls these with "from js import startStep". A function
+// declared in a module is not a global, so make them global.
+self.startStep = (label) => startStep(label);
+self.finishStep = (id) => finishStep(id);
+self.renameStep = (id, label) => updateStep(id, {label});
+
+// --- Downloads -----------------------------------------------------------------
+//
+// Files are downloaded here, with fetch(), rather than by Python - so that
+// every file named in the page's URL can start downloading the moment the
+// worker starts, before there is a Python to ask for it. Python collects each
+// one with download() when it gets to the point of needing it, by which time
+// it has usually arrived.
+
+// URL -> Promise of the download, for those nothing has collected yet
+const downloads = new Map();
+
+// Resolves to {ok, status, bytes}: bytes is a Uint8Array, missing if the
+// server answered with an error status. Rejects if there was no answer.
+async function fetchFile(url) {
+  const step = startStep("Downloading " + url);
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    throw new Error(`Could not load ${url}: ${(error && error.message) || error}`);
+  }
+  if (!response.ok) {
+    return {ok: false, status: response.status};
+  }
+  // Read in pieces, to show how much has arrived so far
+  const chunks = [];
+  let received = 0;
+  let reported = 0;
+  // A response with nothing in it - a 204, say - has no body to read
+  const reader = response.body && response.body.getReader();
+  for (;;) {
+    const {done, value} = reader ? await reader.read() : {done: true};
+    if (done) {
+      break;
+    }
+    chunks.push(value);
+    received += value.length;
+    const now = performance.now();
+    if (now - reported > 100) {
+      reported = now;
+      updateStep(step, {bytes: received});
+    }
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  finishStep(step, {bytes: received});
+  return {ok: true, status: response.status, bytes};
+}
+
+// Start downloading a file that download() will be called for later
+function prefetch(url) {
+  if (url && !downloads.has(url)) {
+    const started = fetchFile(url);
+    // A failure is reported when the file is collected. Until then it must
+    // not count as an unhandled rejection.
+    started.catch(() => {});
+    downloads.set(url, started);
   }
 }
+
+// The download of a file: the one prefetch() started, or a new one. Each
+// download is handed out once, so the file can be freed once it has been used.
+function download(url) {
+  const started = downloads.get(url);
+  if (started) {
+    downloads.delete(url);
+    return started;
+  }
+  return fetchFile(url);
+}
+self.download = download;
 
 // A file name without its extension, as Python's Path(name).stem - which is
 // how Datasette names a database: "chinook.sqlite" is the database "chinook"
@@ -565,29 +653,33 @@ while True:
         field_size_limit = int(field_size_limit / 10)
 
 
-# Each line passed to log() is shown as a step on the loading screen
-from js import log
+import contextlib
+from js import download, startStep, finishStep, renameStep
+
+
+@contextlib.contextmanager
+def step(label):
+    """A step shown on the loading screen: in progress for as long as the
+    with block runs. Steps can overlap - the downloads are steps too, and
+    carry on while these run. Yields an id for renameStep()."""
+    step_id = startStep(label)
+    yield step_id
+    finishStep(step_id)
 
 
 async def fetch_bytes(url):
-    log("Downloading " + url)
-    response = await pyfetch(url)
-    if not response.ok:
-        raise ValueError("Could not load {}: HTTP {}".format(url, response.status))
-    return await response.bytes()
+    # The worker started downloading every file named in the page's URL
+    # before Python was loaded: this waits for the one asked for, which is
+    # its own step on the loading screen
+    result = await download(url)
+    if not result.ok:
+        raise ValueError("Could not load {}: HTTP {}".format(url, result.status))
+    return result.bytes.to_bytes()
 
 
-import sqlite3
-from pyodide.http import pyfetch
-names = []
-for name, url in to_load:
-    if url:
-        content = await fetch_bytes(url)
-        with open(name, "wb") as fp:
-            fp.write(content)
-    else:
-        sqlite3.connect(name).execute("vacuum")
-    names.append(name)
+def file_name(url):
+    "The last part of a URL's path, for naming a file on the loading screen"
+    return url.split("?")[0].split("#")[0].rstrip("/").split("/")[-1] or url
 
 
 def install_datasette_source(zip_bytes, site_packages):
@@ -667,43 +759,52 @@ def install_datasette_source(zip_bytes, site_packages):
 
 
 import micropip
-log("Installing Datasette...")
-# Pyodide bundles idna 3.11, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
-await micropip.install("idna>=3.18")
-await micropip.install("python-multipart==0.0.15")
-# To avoid possible 'from typing_extensions import deprecated' error:
-await micropip.install('typing-extensions>=4.12.2')
-if settings["datasette_source_url"]:
-    # ?ref= named a branch, tag or commit: run Datasette from its source
-    import importlib, site
-    try:
-        source_zip = await fetch_bytes(settings["datasette_source_url"])
-    except ValueError as ex:
-        if "HTTP 404" in str(ex):
-            raise ValueError(
-                "?ref={} is not a branch, tag or commit in the Datasette "
-                "repository on GitHub".format(settings["datasette_source_ref"])
-            )
-        raise
-    source_version, source_dependencies, source_commit = install_datasette_source(
-        source_zip, site.getsitepackages()[0]
-    )
-    del source_zip
-    importlib.invalidate_caches()
-    log("Installing dependencies of Datasette {}{}".format(
-        source_version, " (commit {})".format(source_commit[:7]) if source_commit else ""
-    ))
-    await micropip.install(source_dependencies, pre=True)
-else:
-    try:
-        await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
-    except ValueError:
-        # Older Datasette releases: workaround for "Requested 'h11<0.13,>=0.11',
-        # but h11==0.13.0 is already installed". Only used as a fallback, as
-        # recent releases don't need these pins
-        await micropip.install("h11==0.12.0")
-        await micropip.install("httpx==0.23")
-        await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
+import importlib, importlib.metadata
+with step("Installing Datasette") as install_step:
+    # One call, so that all three are looked up and downloaded together.
+    # They cannot go in the call that installs Datasette as well: micropip
+    # resolves the requirements of one call concurrently, and a dependency
+    # of Datasette that asks for any idna can be given the one bundled with
+    # Pyodide before idna>=3.18 has been found on PyPI.
+    await micropip.install([
+        # Pyodide bundles idna 3.11, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
+        "idna>=3.18",
+        "python-multipart==0.0.15",
+        # To avoid possible 'from typing_extensions import deprecated' error:
+        "typing-extensions>=4.12.2",
+    ])
+    if settings["datasette_source_url"]:
+        # ?ref= named a branch, tag or commit: run Datasette from its source
+        import site
+        try:
+            source_zip = await fetch_bytes(settings["datasette_source_url"])
+        except ValueError as ex:
+            if "HTTP 404" in str(ex):
+                raise ValueError(
+                    "?ref={} is not a branch, tag or commit in the Datasette "
+                    "repository on GitHub".format(settings["datasette_source_ref"])
+                )
+            raise
+        source_version, source_dependencies, source_commit = install_datasette_source(
+            source_zip, site.getsitepackages()[0]
+        )
+        del source_zip
+        importlib.invalidate_caches()
+        renameStep(install_step, "Installing Datasette {}{}".format(
+            source_version, " (commit {})".format(source_commit[:7]) if source_commit else ""
+        ))
+        await micropip.install(source_dependencies, pre=True)
+    else:
+        try:
+            await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
+        except ValueError:
+            # Older Datasette releases: workaround for "Requested 'h11<0.13,>=0.11',
+            # but h11==0.13.0 is already installed". Only used as a fallback, as
+            # recent releases don't need these pins
+            await micropip.install("h11==0.12.0")
+            await micropip.install("httpx==0.23")
+            await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
+        renameStep(install_step, "Installing Datasette " + importlib.metadata.version("datasette"))
 import re
 
 
@@ -729,8 +830,8 @@ async def install_resolving_conflicts(requirement, attempts=5, pre=False):
 # release so are the plugins: plugin releases that support a Datasette alpha
 # are published as alphas too, and the stable ones often do not work with it.
 for install_url in settings["install_urls"]:
-    log("Installing " + install_url)
-    await install_resolving_conflicts(install_url, pre=settings["pre"])
+    with step("Installing " + install_url):
+        await install_resolving_conflicts(install_url, pre=settings["pre"])
 
 
 async def install_missing_requirements():
@@ -766,34 +867,40 @@ async def install_missing_requirements():
                     missing.add(requirement.name)
         if not missing:
             return
-        for name in sorted(missing):
-            try:
-                await micropip.install(name)
-            except Exception:
-                # Not installable here - leave it to fail where it is used,
-                # as it would have without this check
-                pass
+        with step("Installing missing dependencies: " + ", ".join(sorted(missing))):
+            for name in sorted(missing):
+                try:
+                    await micropip.install(name)
+                except Exception:
+                    # Not installable here - leave it to fail where it is used,
+                    # as it would have without this check
+                    pass
 
 
 if settings["install_urls"]:
     await install_missing_requirements()
+
+# The database files. These have been downloading since the worker started:
+# they are collected here, after the installs, so that neither waits for
+# the other.
+import sqlite3
+names = []
+for name, url in to_load:
+    if url:
+        content = await fetch_bytes(url)
+        with open(name, "wb") as fp:
+            fp.write(content)
+        del content
+    else:
+        sqlite3.connect(name).execute("vacuum")
+    names.append(name)
+
 # Execute any ?sql=URL SQL
 for sql_url in [url for kind, urls in sources if kind == "sql" for url in urls]:
     # Fetch that SQL and execute it
     sql = (await fetch_bytes(sql_url)).decode("utf-8")
-    sqlite3.connect("data.db").executescript(sql)
-metadata = {
-    "about": "Datasette Lite",
-    "about_url": "https://github.com/simonw/datasette-lite"
-}
-from datasette.utils import parse_metadata
-if settings["metadata_url"]:
-    content = (await fetch_bytes(settings["metadata_url"])).decode("utf-8")
-    metadata = parse_metadata(content)
-config = None
-if settings["config_url"]:
-    content = (await fetch_bytes(settings["config_url"])).decode("utf-8")
-    config = parse_metadata(content)
+    with step("Running SQL from " + file_name(sql_url)):
+        sqlite3.connect("data.db").executescript(sql)
 
 # Import data from ?csv=URL CSV files/?json=URL JSON files
 import_sources = [source for source in sources if source[0] in ("csv", "json", "parquet")]
@@ -802,7 +909,8 @@ if import_sources:
         # Datasette 1.0 alphas already depend on sqlite-utils 4
         import sqlite_utils
     except ImportError:
-        await install_resolving_conflicts("sqlite-utils==3.28")
+        with step("Installing sqlite-utils"):
+            await install_resolving_conflicts("sqlite-utils==3.28")
         import sqlite_utils
     from sqlite_utils.utils import rows_from_file, TypeTracker, Format
     db = sqlite_utils.Database("data.db")
@@ -821,9 +929,13 @@ if import_sources:
                 bit = "{}_{}".format(base_bit, prefix)
             table_names.add(bit)
 
+            source_bytes = await fetch_bytes(url)
+            import_step = startStep(
+                "Importing {} into table {}".format(file_name(url), bit)
+            )
             if source_type == "csv":
                 tracker = TypeTracker()
-                csv_bytes = await fetch_bytes(url)
+                csv_bytes = source_bytes
                 with open("csv.csv", "wb") as fp:
                     fp.write(csv_bytes)
 
@@ -864,7 +976,7 @@ if import_sources:
                 )
             elif source_type == "json":
                 pk = None
-                json_bytes = await fetch_bytes(url)
+                json_bytes = source_bytes
                 try:
                     json_data = json.loads(json_bytes)
                 except json.decoder.JSONDecodeError:
@@ -896,7 +1008,7 @@ if import_sources:
                 await micropip.install("pyarrow")
                 import pyarrow.parquet
                 with open("parquet.parquet", "wb") as fp:
-                    fp.write(await fetch_bytes(url))
+                    fp.write(source_bytes)
                 df = pyarrow.parquet.read_table("parquet.parquet").to_pandas()
                 # sqlite-utils can't store pandas Timestamps - use ISO strings
                 for column in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
@@ -904,8 +1016,23 @@ if import_sources:
                         lambda value: None if value != value else value.isoformat()
                     )
                 db[bit].insert_all(df.to_dict(orient="records"), alter=True)
+            del source_bytes
+            finishStep(import_step)
 
-log("Starting Datasette...")
+starting_step = startStep("Starting Datasette")
+metadata = {
+    "about": "Datasette Lite",
+    "about_url": "https://github.com/simonw/datasette-lite"
+}
+from datasette.utils import parse_metadata
+if settings["metadata_url"]:
+    content = (await fetch_bytes(settings["metadata_url"])).decode("utf-8")
+    metadata = parse_metadata(content)
+config = None
+if settings["config_url"]:
+    content = (await fetch_bytes(settings["config_url"])).decode("utf-8")
+    config = parse_metadata(content)
+
 from datasette.app import Datasette
 import inspect
 
@@ -946,6 +1073,7 @@ if settings["root"]:
     )
     if "ds_actor" not in bridge.cookies.as_dict():
         raise ValueError("Could not sign in as root: HTTP {}".format(_response["status"]))
+finishStep(starting_step)
 `;
 // PYTHON-END startup
 
@@ -1051,13 +1179,29 @@ async function startDatasette(settings) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
+  // Start every download now, alongside Pyodide. None of them needs Python,
+  // and waiting for them is most of what a first visit spends its time on.
+  [
+    ...toLoad.map(([name, url]) => url),
+    datasetteSourceUrl,
+    ...sources.flatMap(([sourceType, urls]) => urls),
+    settings.metadataUrl,
+    settings.configUrl,
+  ].forEach(prefetch);
+  // "pyodide" is the step the loading screen starts out showing
   const { loadPyodide } = await import(PYODIDE_URL + "pyodide.mjs");
   self.pyodide = await loadPyodide({
     indexURL: PYODIDE_URL,
     fullStdLib: true
   });
-  await pyodide.loadPackage('micropip', {messageCallback: logPackageLoading});
-  await pyodide.loadPackage('setuptools', {messageCallback: logPackageLoading}); // For pkg_resources
+  finishStep("pyodide");
+  // One call, so the packages download together. setuptools is for
+  // pkg_resources. What Pyodide reports as it loads them goes to the console.
+  const packagesStep = startStep("Loading micropip and setuptools");
+  await pyodide.loadPackage(['micropip', 'setuptools'], {
+    messageCallback: (line) => console.log({line}),
+  });
+  finishStep(packagesStep);
   // Values are passed as data, never interpolated into Python source
   pyodide.globals.set("settings_json", JSON.stringify({
     to_load: toLoad,
