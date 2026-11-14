@@ -1,4 +1,5 @@
 .vscode
+.claude
 .DS_Store
 tests/fixtures/generated/
 __pycache__/
