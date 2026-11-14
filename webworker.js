@@ -12,6 +12,12 @@
 
 const PYODIDE_VERSION = "314.0.8";
 const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+// ?ref=main (or any other branch, tag or commit) runs Datasette from a zip of
+// its source on GitHub. GitHub does not serve those zips with CORS headers,
+// so they are fetched through this proxy, which adds them:
+// https://<proxy>/<owner>/<repo>/<ref>
+const GITHUB_ZIP_PROXY = "https://github-zip-cors-proxy.simonw.workers.dev";
+const DATASETTE_REPO = "simonw/datasette";
 // This file is a module worker - shell.js starts it with {type: "module"} -
 // because Pyodide no longer runs in classic workers. Pyodide itself is
 // imported in startDatasette() rather than here: a top-level await would
@@ -42,6 +48,20 @@ function logPackageLoading(line) {
 function stem(fileName) {
   const dot = fileName.lastIndexOf(".");
   return dot > 0 && dot < fileName.length - 1 ? fileName.slice(0, dot) : fileName;
+}
+
+// Is this ?ref= a release to install from PyPI - 0.64.2, 1.0a11, 1.0rc1?
+// A short commit SHA made only of digits looks like one too: use the full
+// SHA for those.
+function isVersionNumber(ref) {
+  return /^\d+(\.\d+)*((a|b|rc)\d+)?(\.?(post|dev)\d+)*$/.test(ref);
+}
+
+// Is this ?ref= something GitHub could have a branch, tag or commit for?
+// Mirrors what the zip proxy accepts.
+function isGitRef(ref) {
+  return /^[A-Za-z0-9._\/-]{1,200}$/.test(ref) &&
+    ref.split("/").every(part => part !== "" && !part.startsWith("."));
 }
 
 function databaseFiles(sqliteUrls) {
@@ -569,6 +589,83 @@ for name, url in to_load:
         sqlite3.connect(name).execute("vacuum")
     names.append(name)
 
+
+def install_datasette_source(zip_bytes, site_packages):
+    """Install Datasette from a zip of its GitHub repository, as served by
+    https://github.com/simonw/datasette/archive/<ref>.zip
+
+    Datasette is pure Python with no build step, so this copies the datasette/
+    package out of the zip into site_packages and writes a .dist-info
+    directory next to it. That directory is what makes Datasette count as
+    installed: without it a plugin that requires "datasette" would have
+    micropip install a second copy from PyPI.
+
+    Returns (version, dependencies, commit). The dependencies are the
+    requirement strings from the zip's pyproject.toml, which the caller needs
+    to install. commit is the SHA GitHub records in the zip, or None."""
+    import io
+    import pathlib
+    import re
+    import tomllib
+    import zipfile
+
+    archive = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    names = [name for name in archive.namelist() if not name.endswith("/")]
+    # Everything is inside one directory, named after the repository and ref
+    roots = set(name.split("/", 1)[0] for name in archive.namelist())
+    if len(roots) != 1:
+        raise ValueError("Not a GitHub source zip: expected one top level directory")
+    root = roots.pop() + "/"
+    package = root + "datasette/"
+    if root + "pyproject.toml" not in names or package + "version.py" not in names:
+        raise ValueError(
+            "This version of Datasette cannot be run from source: it needs a "
+            "pyproject.toml and datasette/version.py. For an older release use "
+            "its version number, e.g. ?ref=0.64.2"
+        )
+    project = tomllib.loads(archive.read(root + "pyproject.toml").decode("utf-8")).get("project") or {}
+    dependencies = list(project.get("dependencies") or [])
+    match = re.search(
+        r"""^__version__\s*=\s*["']([^"']+)["']""",
+        archive.read(package + "version.py").decode("utf-8"),
+        re.M,
+    )
+    if not match:
+        raise ValueError("Could not find __version__ in datasette/version.py")
+    version = match.group(1)
+    # GitHub stores the commit the zip was made from as the zip's comment
+    comment = archive.comment.decode("ascii", "replace").strip()
+    commit = comment if re.fullmatch(r"[0-9a-f]{40}", comment) else None
+
+    site_packages = pathlib.Path(site_packages)
+    for name in names:
+        if not name.startswith(package):
+            continue
+        parts = name[len(root):].split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise ValueError("Unsafe path in zip: " + name)
+        target = site_packages.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(archive.read(name))
+
+    dist_info = site_packages / "datasette-{}.dist-info".format(version)
+    dist_info.mkdir(parents=True, exist_ok=True)
+    metadata = ["Metadata-Version: 2.1", "Name: datasette", "Version: " + version]
+    metadata.extend("Requires-Dist: " + dependency for dependency in dependencies)
+    (dist_info / "METADATA").write_text("\n".join(metadata) + "\n")
+    (dist_info / "INSTALLER").write_text("datasette-lite\n")
+    entry_points = {"console_scripts": project.get("scripts") or {}}
+    entry_points.update(project.get("entry-points") or {})
+    lines = []
+    for group, entries in entry_points.items():
+        if entries:
+            lines.append("[{}]".format(group))
+            lines.extend("{} = {}".format(key, value) for key, value in entries.items())
+            lines.append("")
+    (dist_info / "entry_points.txt").write_text("\n".join(lines))
+    return version, dependencies, commit
+
+
 import micropip
 log("Installing Datasette...")
 # Pyodide bundles idna 3.11, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
@@ -576,15 +673,37 @@ await micropip.install("idna>=3.18")
 await micropip.install("python-multipart==0.0.15")
 # To avoid possible 'from typing_extensions import deprecated' error:
 await micropip.install('typing-extensions>=4.12.2')
-try:
-    await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
-except ValueError:
-    # Older Datasette releases: workaround for "Requested 'h11<0.13,>=0.11',
-    # but h11==0.13.0 is already installed". Only used as a fallback, as
-    # recent releases don't need these pins
-    await micropip.install("h11==0.12.0")
-    await micropip.install("httpx==0.23")
-    await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
+if settings["datasette_source_url"]:
+    # ?ref= named a branch, tag or commit: run Datasette from its source
+    import importlib, site
+    try:
+        source_zip = await fetch_bytes(settings["datasette_source_url"])
+    except ValueError as ex:
+        if "HTTP 404" in str(ex):
+            raise ValueError(
+                "?ref={} is not a branch, tag or commit in the Datasette "
+                "repository on GitHub".format(settings["datasette_source_ref"])
+            )
+        raise
+    source_version, source_dependencies, source_commit = install_datasette_source(
+        source_zip, site.getsitepackages()[0]
+    )
+    del source_zip
+    importlib.invalidate_caches()
+    log("Installing dependencies of Datasette {}{}".format(
+        source_version, " (commit {})".format(source_commit[:7]) if source_commit else ""
+    ))
+    await micropip.install(source_dependencies, pre=True)
+else:
+    try:
+        await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
+    except ValueError:
+        # Older Datasette releases: workaround for "Requested 'h11<0.13,>=0.11',
+        # but h11==0.13.0 is already installed". Only used as a fallback, as
+        # recent releases don't need these pins
+        await micropip.install("h11==0.12.0")
+        await micropip.install("httpx==0.23")
+        await micropip.install(settings["datasette_to_install"], pre=settings["pre"])
 import re
 
 
@@ -888,13 +1007,26 @@ async function startDatasette(settings) {
   // of any kind, alphas and betas included. ?ref=stable is the most recent
   // stable release, ?ref=1.0a11 (or any version number) is that exact release.
   // ?ref=pre is what the default used to be called, and still works.
+  // Anything else - ?ref=main, another branch, a tag that is not a version
+  // number, a commit SHA - is run from its source on GitHub.
   let datasetteToInstall = 'datasette';
+  let datasetteSourceUrl = null;
   let pre = true;
   if (settings.ref == 'stable') {
     pre = false;
   } else if (settings.ref && settings.ref != 'pre') {
-    datasetteToInstall = `datasette==${settings.ref}`;
-    pre = false;
+    if (isVersionNumber(settings.ref)) {
+      datasetteToInstall = `datasette==${settings.ref}`;
+      pre = false;
+    } else if (isGitRef(settings.ref)) {
+      // Development code needs the preview releases of plugins, as the
+      // default does
+      datasetteSourceUrl = `${GITHUB_ZIP_PROXY}/${DATASETTE_REPO}/${settings.ref}`;
+    } else {
+      throw new Error(
+        `?ref=${settings.ref} is not a version number, branch, tag or commit`
+      );
+    }
   }
   const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);
   if (sqliteUrls.length) {
@@ -931,6 +1063,8 @@ async function startDatasette(settings) {
     to_load: toLoad,
     sources,
     datasette_to_install: datasetteToInstall,
+    datasette_source_url: datasetteSourceUrl,
+    datasette_source_ref: datasetteSourceUrl ? settings.ref : null,
     pre,
     install_urls: (settings.installUrls || []).filter(Boolean),
     metadata_url: settings.metadataUrl || null,
