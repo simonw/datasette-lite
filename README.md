@@ -33,6 +33,8 @@ Datasette's pages are displayed in a full-window `<iframe>` pointing at URLs und
 
 The page you are on mirrors the iframe's location into its `#fragment`, so URLs like `https://lite.datasette.io/?url=...#/fixtures/facetable?_facet=state` can be bookmarked and shared, and the back button works. Links to other sites open in a new window, with `noopener` so the linked site gets no reference back to the Datasette Lite page. Each tab gets its own random `<session>` so multiple Datasette Lite tabs with different data can be open at once.
 
+A response that Datasette sends over time - [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events), a streaming CSV export - reaches the page as it is produced rather than once it is complete, so chat interfaces such as [Datasette Agent](#running-datasette-agent) update as the model replies. If the page stops reading one, by navigating away or aborting the `fetch()`, Datasette is told the client has disconnected.
+
 Cookies are kept in a cookie jar inside the Python ASGI bridge (service workers cannot read or set cookies), so they last until the tab is closed or reloaded - as does all of the data.
 
 If the tab that owns a session goes away, requests for that session fail with an error rather than hanging: a `503` if the tab has already been closed or reloaded, a `504` if it stops answering part way through a request (after four minutes, to leave room for slow SQL queries) and a `500` if the Pyodide worker itself fails. A tab that was opened before Datasette Lite was updated to an incompatible release gets a `409` asking for a reload.
@@ -251,6 +253,66 @@ Here's a list of plugins that have been tested with Datasette Lite, plus demo li
 - [datasette-statistics](https://datasette.io/plugins/datasette-statistics) - SQL functions for statistical calculations - [demo](https://lite.datasette.io/?install=datasette-statistics#/fixtures?sql=with+numbers+as+%28%0A++++select+1+as+number%0A++++union+all%0A++++select+2%0A++++union+all%0A++++select+3%0A++++union+all%0A++++select+4%0A++++union+all%0A++++select+5%0A%29%0Aselect%0A++statistics_mean%28number%29+as+mean%2C%0A++statistics_median%28number%29+as+median%2C%0A++statistics_stdev%28number%29+as+stdev%0Afrom+numbers%3B)
 - [datasette-simple-html](https://datasette.io/plugins/datasette-simple-html) - simple SQL functions for stripping tags and escaping or unescaping HTML strings - [demo](https://lite.datasette.io/?install=datasette-simple-html#/fixtures?sql=select%0A++html_strip_tags%28%27%3Ch1%3EThis+will+have+%3Cem%3Etags+stripped%3C%2Fem%3E%3C%2Fh1%3E%27%29+as+stripped%2C%0A++html_escape%28%27%3Ch1%3EThis+will+have+%3Cem%3Etags+escaped%3C%2Fem%3E%3C%2Fh1%3E%27%29+as+escaped%2C%0A++html_unescape%28%27%26lt%3Bh1%26gt%3BThis+will+have+%26lt%3Bem%26gt%3Btags+unescaped%26lt%3B%2Fem%26gt%3B%26lt%3B%2Fh1%26gt%3B%27%29+as+unescaped)
 
+## Running Datasette Agent
+
+[Datasette Agent](https://github.com/datasette/datasette-agent) is an AI assistant that answers questions by running SQL queries against your data. It works in Datasette Lite, with everything happening in your browser: the model is called from Python in Pyodide using `fetch()`, so your API key and your data go from your browser straight to the model provider and nowhere else.
+
+That needs a model API that allows requests from web pages by sending [CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) headers, which the OpenAI API does.
+
+Datasette Agent needs a default model, and somewhere to keep your API key. Create a configuration file like this one and host it somewhere - a [GitHub Gist](https://gist.github.com/) works:
+
+```yaml
+plugins:
+  datasette-llm:
+    default_model: gpt-5.4-mini
+  datasette-secrets:
+    encryption-key: PASTE-A-KEY-HERE
+```
+
+The `encryption-key` lets [datasette-secrets](https://github.com/datasette/datasette-secrets) store the API key you give it. It is not your API key. Generate one by running this - it does not need to be kept private, since the secrets it protects never leave your browser tab:
+
+```bash
+python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
+```
+
+Then open Datasette Lite with the plugin, your configuration and `?root=1`:
+
+    https://lite.datasette.io/?root=1&install=datasette-agent&config=https://example.com/datasette.yml#/-/secrets
+
+Select `OPENAI_API_KEY` on that page and paste in your key, then choose "Datasette Agent" from the menu at the top right to start a conversation. Add `?url=`, `?csv=` and the other options to chat with your own data.
+
+Things to know:
+
+- The API key and your conversations are kept in memory, so they last until the tab is closed or reloaded.
+- If the key is wrong the chat shows "Connection error" instead of an explanation: the OpenAI API does not send CORS headers with that error, so the browser will not let the page read it.
+
+### Keeping settings in a configuration file
+
+When running Datasette Lite on your own machine you can avoid pasting in the key each time by using the [datasette-lite-env](plugins/datasette-lite-env/) plugin from this repository, which sets environment variables from configuration. Build it as a wheel:
+
+```bash
+uv build --wheel plugins/datasette-lite-env
+```
+
+Then create `local/datasette.json` - anything in the `local/` directory is ignored by Git - with your key in it:
+
+```json
+{
+  "plugins": {
+    "datasette-llm": {"default_model": "gpt-5.4-mini"},
+    "datasette-lite-env": {"env": {"OPENAI_API_KEY": "sk-..."}}
+  }
+}
+```
+
+Run `./serve.sh` and visit:
+
+    http://localhost:8009/?root=1&install=datasette-agent&install=http://localhost:8009/plugins/datasette-lite-env/dist/datasette_lite_env-0.1-py3-none-any.whl&config=http://localhost:8009/local/datasette.json#/-/agent
+
+Only do this with a file served from your own machine - anyone who can fetch that URL can read the key.
+
+The same plugin can point the OpenAI client library at a different server that speaks the same API, by setting `OPENAI_BASE_URL`. `python tests/mock_openai.py 8010` runs a stand-in for the OpenAI API that plays a short scripted conversation, for trying this out without a key: set `"OPENAI_BASE_URL": "http://localhost:8010/v1"` and any value for `OPENAI_API_KEY`, and add `&csv=tests/fixtures/items.csv` to the URL.
+
 ## Analytics
 
 By default, hits to `https://lite.datasette.io/` are logged using [Plausible](https://plausible.io/).
@@ -284,5 +346,7 @@ uv run --python 3.12 \
 - `tests/test_datasette_lite.py` - the original browser tests, loading the default databases.
 - `tests/test_url_patterns.py` - every supported `?` option and `#` URL pattern, using the small files in `tests/fixtures/`.
 - `tests/test_plugins_and_post.py` - JavaScript (core and plugins), POST forms, CSRF, sign-in, uploads, downloads, the 1.0 alpha write API, multiple tabs, other pages open on the same origin, worker failures, a cross-origin page in the iframe and service worker restarts.
+- `tests/test_streaming.py` - responses that arrive over time, using the plugin in `tests/plugins/`.
+- `tests/test_datasette_agent.py` - a Datasette Agent conversation, with `tests/mock_openai.py` standing in for the OpenAI API.
 
 Tests that download from third-party hosts beyond Pyodide, PyPI and the default databases are marked `network`; skip them with `-m "not network"`. To use an existing Chromium binary set `CHROMIUM_EXECUTABLE=/path/to/chrome`. If the browser needs an HTTPS proxy set `DATASETTE_LITE_TEST_PROXY` (or `HTTPS_PROXY`).

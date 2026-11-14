@@ -156,9 +156,74 @@ class CookieJar:
         return {name: value for (name, path), value in self._cookies.items()}
 
 
+class ResponseStream:
+    """Where the bridge delivers a response that the app sends in more than
+    one piece - a server-sent events endpoint, a streaming CSV export - so
+    that it reaches the browser as it is produced, not once it is complete.
+
+    on_start(status, headers) is called once, followed by on_chunk(bytes) any
+    number of times. Pieces sent in quick succession are combined, so that an
+    export of a million rows is not a million messages: a chunk is passed on
+    once FLUSH_BYTES have built up, or FLUSH_SECONDS after its first piece."""
+
+    FLUSH_BYTES = 64 * 1024
+    FLUSH_SECONDS = 0.02
+
+    def __init__(self, on_start, on_chunk):
+        self._on_start = on_start
+        self._on_chunk = on_chunk
+        self.started = False
+        self.disconnected = False
+        self._on_disconnect = []
+        self._buffer = bytearray()
+        self._timer = None
+
+    def start(self, status, headers):
+        self.started = True
+        if not self.disconnected:
+            self._on_start(status, headers)
+
+    def write(self, chunk):
+        if self.disconnected or not chunk:
+            return
+        self._buffer.extend(chunk)
+        if len(self._buffer) >= self.FLUSH_BYTES:
+            self.flush()
+        elif self._timer is None:
+            self._timer = asyncio.get_event_loop().call_later(
+                self.FLUSH_SECONDS, self.flush
+            )
+
+    def flush(self):
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        if self._buffer:
+            chunk = bytes(self._buffer)
+            del self._buffer[:]
+            if not self.disconnected:
+                self._on_chunk(chunk)
+
+    def disconnect(self):
+        """The browser has stopped reading the response: it navigated away,
+        or aborted the fetch(). The app is told with http.disconnect, as a
+        server would tell it, and anything it still sends is discarded."""
+        if self.disconnected:
+            return
+        self.disconnected = True
+        self.flush()
+        for callback in self._on_disconnect:
+            callback()
+
+
 class ASGIBridge:
     """Drives an ASGI app: runs the lifespan protocol once and handles HTTP
-    requests one message-cycle at a time, returning a plain dict response."""
+    requests one message-cycle at a time, returning a plain dict response.
+
+    Pass handle() a ResponseStream to have a response that arrives in several
+    pieces delivered through it instead - the dict returned then has an empty
+    body and "streamed": True. A response sent in one piece is returned in
+    the dict as usual."""
 
     def __init__(self, app, root_path=""):
         self.app = app
@@ -204,7 +269,8 @@ class ASGIBridge:
         await self._startup_complete
 
     async def handle(self, method, path, query_string, headers, body=b"",
-                     scheme="http", host="localhost", port=80, raw_path=None):
+                     scheme="http", host="localhost", port=80, raw_path=None,
+                     stream=None):
         if isinstance(query_string, str):
             query_string = query_string.encode("latin-1")
         if isinstance(body, str):
@@ -253,7 +319,10 @@ class ASGIBridge:
         }
 
         request_messages = [{"type": "http.request", "body": body, "more_body": False}]
+        # Set once the response has been sent, or the browser stops reading it
         response_complete = asyncio.Event()
+        if stream is not None:
+            stream._on_disconnect.append(response_complete.set)
 
         async def receive():
             if request_messages:
@@ -268,32 +337,42 @@ class ASGIBridge:
             t = message["type"]
             if t == "http.response.start":
                 response["status"] = message["status"]
-                response["headers"] = [
-                    [k.decode("latin-1"), v.decode("latin-1")]
-                    for k, v in message.get("headers", [])
-                ]
+                response["headers"] = []
+                for name, value in message.get("headers", []):
+                    name = name.decode("latin-1")
+                    value = value.decode("latin-1")
+                    if name.lower() == "set-cookie":
+                        self.cookies.store(value, path)
+                    else:
+                        response["headers"].append([name, value])
             elif t == "http.response.body":
                 chunk = message.get("body", b"") or b""
-                response["body"].extend(chunk)
-                if not message.get("more_body"):
+                more_body = bool(message.get("more_body"))
+                if stream is not None and (more_body or stream.started):
+                    # More than one piece: pass each on as it arrives
+                    if not stream.started:
+                        stream.start(response["status"], response["headers"])
+                    stream.write(chunk)
+                else:
+                    response["body"].extend(chunk)
+                if not more_body:
                     response_complete.set()
 
         try:
             await self.app(scope, receive, send)
         finally:
             response_complete.set()
+            if stream is not None:
+                stream.flush()
 
-        headers_out = []
-        for name, value in response["headers"]:
-            if name.lower() == "set-cookie":
-                self.cookies.store(value, path)
-            else:
-                headers_out.append([name, value])
-        return {
+        result = {
             "status": response["status"],
-            "headers": headers_out,
+            "headers": response["headers"],
             "body": bytes(response["body"]),
         }
+        if stream is not None and stream.started:
+            result["streamed"] = True
+        return result
 
 
 HARDCODED_ATTRIBUTE_RE = re.compile(
@@ -758,17 +837,46 @@ from js import Object
 from pyodide.ffi import to_js
 
 
-async def handle_request(method, raw_path, query, headers_json, body_buf, scheme, host, port):
+# Responses that are being streamed, so cancel_request() can find them
+streams = {}
+
+
+async def handle_request(
+    request_id, method, raw_path, query, headers_json, body_buf, scheme, host, port,
+    streaming, on_start, on_chunk,
+):
     headers = json.loads(headers_json)
     body = b"" if body_buf is None else body_buf.to_py().tobytes()
-    resp = await bridge.handle(
-        method, unquote(raw_path), query, headers, body,
-        scheme=scheme, host=host, port=int(port), raw_path=raw_path,
-    )
+    stream = None
+    if streaming:
+        stream = ResponseStream(
+            lambda status, response_headers: on_start(status, json.dumps(response_headers)),
+            lambda chunk: on_chunk(to_js(chunk)),
+        )
+        streams[request_id] = stream
+    try:
+        resp = await bridge.handle(
+            method, unquote(raw_path), query, headers, body,
+            scheme=scheme, host=host, port=int(port), raw_path=raw_path,
+            stream=stream,
+        )
+    finally:
+        streams.pop(request_id, None)
     return to_js(
-        {"status": resp["status"], "headers": resp["headers"], "body": resp["body"]},
+        {
+            "status": resp["status"],
+            "headers": resp["headers"],
+            "body": resp["body"],
+            "streamed": bool(resp.get("streamed")),
+        },
         dict_converter=Object.fromEntries,
     )
+
+
+def cancel_request(request_id):
+    stream = streams.get(request_id)
+    if stream is not None:
+        stream.disconnect()
 `;
 
 async function startDatasette(settings) {
@@ -835,14 +943,33 @@ async function startDatasette(settings) {
   await pyodide.runPythonAsync(STARTUP_PY);
   await pyodide.runPythonAsync(HANDLE_PY);
   self.pyHandleRequest = pyodide.globals.get("handle_request");
+  self.pyCancelRequest = pyodide.globals.get("cancel_request");
 }
 
-async function handleRequest(msg) {
+// Answers one request. A response that Datasette sends in a single piece is
+// returned whole. One sent in several pieces - server-sent events, a CSV
+// export - is posted to the shell as it is produced, provided the request
+// said it can take that (msg.stream): a "response-start" message, then
+// "response-chunk" messages, with "response-end" posted by the caller.
+// Returns {streamed: true} in that case, having called onStreamStart() first.
+async function handleRequest(msg, onStreamStart) {
   const url = new URL(msg.url);
   const port = url.port
     ? parseInt(url.port, 10)
     : (url.protocol === "https:" ? 443 : 80);
+  const onStart = (status, headersJson) => {
+    onStreamStart && onStreamStart();
+    self.postMessage({
+      type: 'response-start', id: msg.id, status, headers: JSON.parse(headersJson)
+    });
+  };
+  const onChunk = (chunk) => {
+    // Copy the chunk out of the WASM heap so it can be transferred
+    const copy = chunk.slice();
+    self.postMessage({type: 'response-chunk', id: msg.id, chunk: copy.buffer}, [copy.buffer]);
+  };
   const result = await self.pyHandleRequest(
+    msg.id,
     msg.method,
     url.pathname,
     url.search.replace(/^\?/, ""),
@@ -851,7 +978,13 @@ async function handleRequest(msg) {
     url.protocol.replace(":", ""),
     url.hostname,
     port,
+    !!msg.stream,
+    onStart,
+    onChunk,
   );
+  if (result.streamed) {
+    return {streamed: true};
+  }
   // Copy the body out of the WASM heap so it can be transferred
   const body = result.body ? result.body.slice() : new Uint8Array();
   return {status: result.status, headers: result.headers, body: body.buffer};
@@ -872,18 +1005,33 @@ self.onmessage = async (event) => {
     return;
   }
   if (data.type == 'request') {
+    // Set once the response has started to be streamed to the shell, after
+    // which a failure can no longer be reported as a 500
+    let streaming = false;
     try {
       await readyPromise;
-      const response = await handleRequest(data);
-      self.postMessage({type: 'response', id: data.id, ...response}, [response.body]);
+      const response = await handleRequest(data, () => { streaming = true; });
+      if (response.streamed) {
+        self.postMessage({type: 'response-end', id: data.id});
+      } else {
+        self.postMessage({type: 'response', id: data.id, ...response}, [response.body]);
+      }
     } catch (error) {
-      const body = new TextEncoder().encode(
-        "Datasette Lite error: " + ((error && error.message) || error)
-      ).buffer;
+      const message = "Datasette Lite error: " + ((error && error.message) || error);
+      if (streaming) {
+        self.postMessage({type: 'response-end', id: data.id, error: message});
+        return;
+      }
+      const body = new TextEncoder().encode(message).buffer;
       self.postMessage({
         type: 'response', id: data.id, status: 500,
         headers: [["content-type", "text/plain; charset=utf-8"]], body
       }, [body]);
     }
+    return;
+  }
+  if (data.type == 'cancel') {
+    // The browser stopped reading a streamed response
+    self.pyCancelRequest && self.pyCancelRequest(data.id);
   }
 };

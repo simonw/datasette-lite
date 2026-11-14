@@ -4,7 +4,9 @@ import re
 import shutil
 import socket
 import sqlite3
+import sys
 import time
+import zipfile
 from http.client import HTTPConnection
 from subprocess import Popen, DEVNULL
 
@@ -46,6 +48,50 @@ def generated_fixtures():
     return generated
 
 
+def build_wheel(directory, name, module_path, version="0.1", requires=()):
+    """Package a single-module Datasette plugin as a wheel, so that it can be
+    installed with ?install=<url> like a plugin from PyPI. Returns the wheel's
+    file name. A wheel is a zip file - no build tool needed."""
+    module_path = pathlib.Path(module_path)
+    module = module_path.stem
+    dist = name.replace("-", "_")
+    info = "{}-{}.dist-info".format(dist, version)
+    files = {
+        module_path.name: module_path.read_text(),
+        info + "/METADATA": "Metadata-Version: 2.1\nName: {}\nVersion: {}\n{}".format(
+            name, version, "".join("Requires-Dist: {}\n".format(r) for r in requires)
+        ),
+        info + "/WHEEL": (
+            "Wheel-Version: 1.0\nGenerator: datasette-lite-tests\n"
+            "Root-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+        info + "/entry_points.txt": "[datasette]\n{} = {}\n".format(module, module),
+    }
+    files[info + "/RECORD"] = "".join(
+        "{},,\n".format(path) for path in list(files) + [info + "/RECORD"]
+    )
+    wheel = "{}-{}-py3-none-any.whl".format(dist, version)
+    with zipfile.ZipFile(pathlib.Path(directory) / wheel, "w") as archive:
+        for path, content in files.items():
+            archive.writestr(path, content)
+    return wheel
+
+
+@pytest.fixture(scope="session")
+def plugin_wheels(generated_fixtures, static_server):
+    "URLs of wheels of the plugins in this repository, keyed by plugin name"
+    sources = {
+        "datasette-lite-test-stream": root / "tests" / "plugins" / "datasette_lite_test_stream.py",
+        "datasette-lite-env": root / "plugins" / "datasette-lite-env" / "datasette_lite_env.py",
+    }
+    return {
+        name: "{}/tests/fixtures/generated/{}".format(
+            static_server, build_wheel(generated_fixtures, name, path)
+        )
+        for name, path in sources.items()
+    }
+
+
 @pytest.fixture(scope="session")
 def static_server(generated_fixtures):
     port = int(os.environ.get("DATASETTE_LITE_TEST_PORT") or _free_port())
@@ -65,6 +111,31 @@ def static_server(generated_fixtures):
     else:
         process.terminate()
         raise RuntimeError("Failed to start http server")
+    yield "http://localhost:{}".format(port)
+    process.terminate()
+    process.wait()
+
+
+@pytest.fixture(scope="session")
+def mock_openai():
+    "A stand-in for the OpenAI API - see tests/mock_openai.py"
+    port = _free_port()
+    process = Popen(
+        [sys.executable, str(root / "tests" / "mock_openai.py"), str(port)],
+        stdout=DEVNULL,
+        stderr=DEVNULL,
+    )
+    for _ in range(50):
+        try:
+            conn = HTTPConnection("localhost:{}".format(port))
+            conn.request("GET", "/_requests")
+            conn.getresponse()
+            break
+        except ConnectionRefusedError:
+            time.sleep(0.2)
+    else:
+        process.terminate()
+        raise RuntimeError("Failed to start mock OpenAI server")
     yield "http://localhost:{}".format(port)
     process.terminate()
     process.wait()

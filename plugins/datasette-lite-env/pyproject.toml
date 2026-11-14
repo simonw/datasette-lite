@@ -1,0 +1,18 @@
+[project]
+name = "datasette-lite-env"
+version = "0.1"
+description = "Set environment variables from Datasette plugin configuration"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = ["datasette"]
+
+[project.entry-points.datasette]
+datasette_lite_env = "datasette_lite_env"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["datasette_lite_env"]

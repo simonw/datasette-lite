@@ -3,3 +3,7 @@
 tests/fixtures/generated/
 __pycache__/
 .pytest_cache/
+local/
+plugins/*/dist/
+plugins/*/build/
+*.egg-info/
