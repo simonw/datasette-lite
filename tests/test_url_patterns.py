@@ -257,7 +257,7 @@ def test_external_links_open_in_new_window(page, static_server):
     "blocked,expected",
     (
         # Pyodide cannot be downloaded: a blocked CDN, or no network
-        ("**/pyodide.js", "pyodide.js"),
+        ("**/pyodide.mjs", "pyodide.mjs"),
         # The worker script itself is missing
         ("**/webworker.js", "webworker.js"),
     ),
@@ -323,13 +323,13 @@ def test_load_error_is_displayed(page, static_server):
 
 
 def test_loading_screen_fits_a_phone(browser, static_server):
-    # Its own context: a phone-sized one, where pyodide.js never arrives so
+    # Its own context: a phone-sized one, where pyodide.mjs never arrives so
     # the page stays on the loading screen
     context = browser.new_context(
         viewport={"width": 375, "height": 700}, is_mobile=True, has_touch=True
     )
     try:
-        context.route("**/pyodide.js", lambda route: None)
+        context.route("**/pyodide.mjs", lambda route: None)
         page = context.new_page()
         page.goto(static_server + "/?memory=1")
         expect(page.locator("#loading-indicator h1")).to_be_visible()
@@ -350,13 +350,13 @@ def test_loading_screen_fits_a_phone(browser, static_server):
 
 def test_load_buttons_on_loading_screen(browser, static_server):
     "The buttons are pinned to the bottom of the loading screen and work from there"
-    # Its own context: a phone-sized one, where pyodide.js never arrives so
+    # Its own context: a phone-sized one, where pyodide.mjs never arrives so
     # the page stays on the loading screen
     context = browser.new_context(
         viewport={"width": 375, "height": 700}, is_mobile=True, has_touch=True
     )
     try:
-        context.route("**/pyodide.js", lambda route: None)
+        context.route("**/pyodide.mjs", lambda route: None)
         page = context.new_page()
         page.goto(static_server + "/?memory=1")
         expect(page.locator("#loading-indicator h1")).to_be_visible()

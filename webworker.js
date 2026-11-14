@@ -10,14 +10,21 @@
 // extract and exercise the exact code that runs in the browser. Constraint:
 // those blocks must contain no backticks and no "${".
 
-const PYODIDE_VERSION = "0.27.2";
+const PYODIDE_VERSION = "314.0.8";
 const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
-importScripts(PYODIDE_URL + "pyodide.js");
+// This file is a module worker - shell.js starts it with {type: "module"} -
+// because Pyodide no longer runs in classic workers. Pyodide itself is
+// imported in startDatasette() rather than here: a top-level await would
+// delay self.onmessage being set until after the shell's "startup" message
+// had arrived, and the message would be lost.
 
 function log(line) {
   console.log({line});
   self.postMessage({type: 'log', line: line});
 }
+// The startup Python calls this with "from js import log". A function
+// declared in a module is not a global, so make it one.
+self.log = log;
 
 // Pyodide reports several lines for each package it loads ("Loading x",
 // "Loaded x", "No new packages to load"). Only the first is a step worth
@@ -391,6 +398,58 @@ os.link = os.symlink
 if not hasattr(os, "geteuid"):
     os.geteuid = os.getuid
 
+# Pyodide is built without OpenSSL, so hashlib lacks the functions OpenSSL
+# provides. datasette-auth-passwords (and anything else that hashes passwords
+# the standard way) needs pbkdf2_hmac: this is the pure Python implementation
+# CPython itself shipped as a fallback until Python 3.12.
+import hashlib
+if not hasattr(hashlib, "pbkdf2_hmac"):
+    _trans_5C = bytes((x ^ 0x5C) for x in range(256))
+    _trans_36 = bytes((x ^ 0x36) for x in range(256))
+
+    def _pbkdf2_hmac(hash_name, password, salt, iterations, dklen=None):
+        if not isinstance(hash_name, str):
+            raise TypeError(hash_name)
+        if not isinstance(password, (bytes, bytearray)):
+            password = bytes(memoryview(password))
+        if not isinstance(salt, (bytes, bytearray)):
+            salt = bytes(memoryview(salt))
+        inner = hashlib.new(hash_name)
+        outer = hashlib.new(hash_name)
+        blocksize = getattr(inner, "block_size", 64)
+        if len(password) > blocksize:
+            password = hashlib.new(hash_name, password).digest()
+        password = password + b"\x00" * (blocksize - len(password))
+        inner.update(password.translate(_trans_36))
+        outer.update(password.translate(_trans_5C))
+
+        def prf(msg, inner=inner, outer=outer):
+            icpy = inner.copy()
+            ocpy = outer.copy()
+            icpy.update(msg)
+            ocpy.update(icpy.digest())
+            return ocpy.digest()
+
+        if iterations < 1:
+            raise ValueError(iterations)
+        if dklen is None:
+            dklen = outer.digest_size
+        if dklen < 1:
+            raise ValueError(dklen)
+        dkey = b""
+        loop = 1
+        while len(dkey) < dklen:
+            prev = prf(salt + loop.to_bytes(4, "big"))
+            rkey = int.from_bytes(prev, "big")
+            for _ in range(iterations - 1):
+                prev = prf(prev)
+                rkey ^= int.from_bytes(prev, "big")
+            loop += 1
+            dkey += rkey.to_bytes(inner.digest_size, "big")
+        return dkey[:dklen]
+
+    hashlib.pbkdf2_hmac = _pbkdf2_hmac
+
 settings = json.loads(settings_json)
 to_load = settings["to_load"]
 sources = settings["sources"]
@@ -433,7 +492,7 @@ for name, url in to_load:
 
 import micropip
 log("Installing Datasette...")
-# Pyodide bundles idna 3.7, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
+# Pyodide bundles idna 3.11, but httpx2 (used by Datasette 1.0 alphas) needs >=3.18
 await micropip.install("idna>=3.18")
 await micropip.install("python-multipart==0.0.15")
 # To avoid possible 'from typing_extensions import deprecated' error:
@@ -474,6 +533,52 @@ async def install_resolving_conflicts(requirement, attempts=5, pre=False):
 for install_url in settings["install_urls"]:
     log("Installing " + install_url)
     await install_resolving_conflicts(install_url, pre=settings["pre"])
+
+
+async def install_missing_requirements():
+    """Some packages built into the Pyodide distribution do not list their
+    dependencies - starlette lists none, so a plugin that needs starlette gets
+    it without anyio and fails on import. micropip trusts that list, so check
+    what is installed against each package's own metadata and install
+    anything that is missing."""
+    from importlib.metadata import distributions
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        try:
+            # micropip carries its own copy
+            from micropip._vendored.packaging.src.packaging.requirements import Requirement
+        except ImportError:
+            return
+
+    def normalize(name):
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    # A fix can itself bring in a package with the same problem
+    for _ in range(3):
+        installed = {normalize(dist.metadata["Name"]) for dist in distributions()}
+        missing = set()
+        for dist in distributions():
+            for line in dist.requires or []:
+                requirement = Requirement(line)
+                # Skips optional extras, and requirements for other platforms
+                if requirement.marker and not requirement.marker.evaluate({"extra": ""}):
+                    continue
+                if normalize(requirement.name) not in installed:
+                    missing.add(requirement.name)
+        if not missing:
+            return
+        for name in sorted(missing):
+            try:
+                await micropip.install(name)
+            except Exception:
+                # Not installable here - leave it to fail where it is used,
+                # as it would have without this check
+                pass
+
+
+if settings["install_urls"]:
+    await install_missing_requirements()
 # Execute any ?sql=URL SQL
 for sql_url in [url for kind, urls in sources if kind == "sql" for url in urls]:
     # Fetch that SQL and execute it
@@ -589,11 +694,12 @@ if import_sources:
                 assert isinstance(json_data, list), "JSON data must be a list of objects"
                 db[bit].insert_all(json_data, pk=pk, alter=True)
             elif source_type == "parquet":
-                await micropip.install("fastparquet")
-                import fastparquet
+                # pyarrow and pandas come from the Pyodide distribution
+                await micropip.install("pyarrow")
+                import pyarrow.parquet
                 with open("parquet.parquet", "wb") as fp:
                     fp.write(await fetch_bytes(url))
-                df = fastparquet.ParquetFile("parquet.parquet").to_pandas()
+                df = pyarrow.parquet.read_table("parquet.parquet").to_pandas()
                 # sqlite-utils can't store pandas Timestamps - use ISO strings
                 for column in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
                     df[column] = df[column].map(
@@ -705,12 +811,12 @@ async function startDatasette(settings) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
     toLoad.push(["content.db", "https://datasette.io/content.db"]);
   }
+  const { loadPyodide } = await import(PYODIDE_URL + "pyodide.mjs");
   self.pyodide = await loadPyodide({
     indexURL: PYODIDE_URL,
     fullStdLib: true
   });
   await pyodide.loadPackage('micropip', {messageCallback: logPackageLoading});
-  await pyodide.loadPackage('ssl', {messageCallback: logPackageLoading});
   await pyodide.loadPackage('setuptools', {messageCallback: logPackageLoading}); // For pkg_resources
   // Values are passed as data, never interpolated into Python source
   pyodide.globals.set("settings_json", JSON.stringify({

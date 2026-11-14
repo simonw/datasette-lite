@@ -97,7 +97,8 @@ function showError(message) {
 
 // --- The Pyodide worker ------------------------------------------------------
 
-const datasetteWorker = new Worker("webworker.js");
+// A module worker: Pyodide is loaded with import(), see webworker.js
+const datasetteWorker = new Worker("webworker.js", {type: "module"});
 const pending = new Map();
 let nextId = 1;
 
