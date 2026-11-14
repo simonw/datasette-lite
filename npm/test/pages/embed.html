@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Two Datasettes on one page, outside the package's directory</title>
+<script type="module" src="/vendor/datasette-lite/datasette-lite.js"></script>
+</head>
+<body>
+<datasette-lite id="one" src="/vendor/datasette-lite/demo.db" path="/demo/plants" root></datasette-lite>
+
+<datasette-lite id="two" path="/data">
+  <script type="application/sql">
+    create table notes (id integer primary key, body text);
+    insert into notes (body) values ('from inline SQL');
+  </script>
+  <script type="text/csv" data-table="animals">
+name,legs
+cat,4
+bird,2
+  </script>
+  <script type="application/json" data-table="colours">
+    [{"name": "red", "hex": "#f00"}, {"name": "blue", "hex": "#00f"}]
+  </script>
+  <script type="application/json" data-metadata>
+    {"title": "Inline everything"}
+  </script>
+</datasette-lite>
+</body>
+</html>

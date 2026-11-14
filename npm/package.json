@@ -1,0 +1,36 @@
+{
+  "name": "datasette-lite",
+  "version": "0.1.0-prototype.0",
+  "description": "Datasette with Python, SQLite and every dependency bundled: a <datasette-lite> web component, a browser API and a Node server, all working offline",
+  "license": "Apache-2.0",
+  "repository": "github:simonw/datasette-lite",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/datasette-lite.d.ts",
+      "default": "./dist/datasette-lite.js"
+    },
+    "./node": "./dist/node.js",
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "datasette-lite": "bin/datasette-lite.js"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "node build/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "demo": "node bin/datasette-lite.js browser dist/demo.db"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "pyodide": "0.27.2"
+  }
+}

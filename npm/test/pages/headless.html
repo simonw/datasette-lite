@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>No UI, package loaded from another origin</title>
+</head>
+<body>
+<script type="module">
+// "cdn" is replaced by the test with the other origin
+const { DatasetteLite } = await import(new URLSearchParams(location.search).get("cdn") + "datasette-lite.js");
+try {
+  const datasette = await DatasetteLite.start({
+    csv: [{ text: "name,legs\ncat,4\nbird,2", table: "animals" }],
+  });
+  window.result = {
+    rows: await datasette.query("select sum(legs) as legs from animals"),
+    version: datasette.manifest.datasette,
+    registrations: (await navigator.serviceWorker.getRegistrations()).length,
+  };
+} catch (error) {
+  window.result = { error: error.message };
+}
+</script>
+</body>
+</html>

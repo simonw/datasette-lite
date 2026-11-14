@@ -10,6 +10,8 @@ More about this project:
 - [Joining CSV files in your browser using Datasette Lite](https://simonwillison.net/2022/Jun/20/datasette-lite-csvs/)
 - [Plugin support for Datasette Lite](https://simonwillison.net/2022/Aug/17/datasette-lite-plugins/)
 
+An experimental [npm package](npm/README.md) lives in `npm/`: it bundles Pyodide, Datasette and every dependency so Datasette can run with no network access, as a `<datasette-lite>` web component or in Node.
+
 ## How this works
 
 Datasette Lite runs the full server-side Datasette Python web application directly in your browser, using the [Pyodide](https://pyodide.org) build of Python compiled to WebAssembly.

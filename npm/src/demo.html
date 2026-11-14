@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>datasette-lite: offline demo</title>
+<style>
+:root {
+  --ink: #111A35;
+  --quiet: #5c6b7a;
+  --line: #d8e6f5;
+  --blue: #276890;
+  --paper: #F8FAFB;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  color: var(--ink);
+  background: #fff;
+}
+main {
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem 1rem;
+}
+h1 { margin: 0 0 0.25rem 0; font-size: 1.75rem; line-height: 1.2; }
+h2 { margin: 0 0 0.5rem 0; font-size: 1.05rem; }
+p { margin: 0 0 0.75rem 0; }
+.lede { max-width: 46rem; color: var(--quiet); }
+code, pre, textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.5rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+.facts b { font-variant-numeric: tabular-nums; }
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: 1.25rem;
+  align-items: start;
+}
+@media (max-width: 60rem) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+}
+datasette-lite { height: 40rem; border-radius: 6px; }
+.panel {
+  margin-bottom: 1rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+.panel p { font-size: 0.875rem; color: var(--quiet); }
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 5.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  resize: vertical;
+}
+button {
+  margin: 0.5rem 0.4rem 0 0;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: #24465d;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+button:hover, button:focus-visible { border-color: #1a56db; background: #e8effd; }
+button:disabled { opacity: 0.5; cursor: default; }
+pre {
+  max-height: 14rem;
+  margin: 0.6rem 0 0 0;
+  padding: 0.5rem;
+  overflow: auto;
+  border-radius: 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#path { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Datasette, from an npm package, with no network</h1>
+  <p class="lede">
+    Everything on this page - Python, SQLite, Datasette and its dependencies -
+    is being served from the <code>datasette-lite</code> package's own files.
+    The box below is a <code>&lt;datasette-lite&gt;</code> element.
+  </p>
+  <ul class="facts">
+    <li>Datasette <b id="fact-datasette">…</b></li>
+    <li>Python <b id="fact-python">…</b></li>
+    <li>Started in <b id="fact-time">…</b></li>
+    <li>Requests to other hosts: <b id="fact-external">0</b></li>
+  </ul>
+
+  <div class="layout">
+    <datasette-lite id="ds" src="demo.db" path="/demo/plants" root drop hash>
+      <script type="text/csv" data-table="harvests">
+plant,picked,grams
+Artichoke,2024-06-02,410
+Meyer lemon,2024-06-02,655
+Runner bean,2024-08-19,320
+Rhubarb,2024-05-11,900
+      </script>
+    </datasette-lite>
+
+    <div>
+      <div class="panel">
+        <h2>Query it from the page</h2>
+        <p><code>await element.query(sql)</code> goes straight to Datasette's JSON API inside the worker.</p>
+        <textarea id="sql" spellcheck="false">select gardens.name, count(*) as plants,
+  max(height_cm) as tallest
+from plants join gardens on gardens.id = garden_id
+group by gardens.id</textarea>
+        <button id="run" disabled>Run query</button>
+        <pre id="result" hidden></pre>
+      </div>
+      <div class="panel">
+        <h2>Follow where it goes</h2>
+        <p>The <code>datasette-navigate</code> event fires for every page. Now showing:</p>
+        <code id="path">…</code>
+      </div>
+      <div class="panel">
+        <h2>Bring your own data</h2>
+        <p>Drop a <code>.db</code>, <code>.csv</code> or <code>.json</code> file onto Datasette, or choose one. It never leaves this tab.</p>
+        <input type="file" id="file" accept=".db,.sqlite,.sqlite3,.csv,.json,.ndjson,.jsonl,.sql" disabled>
+        <br>
+        <button id="download" disabled>Download demo.db with your changes</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+import "./datasette-lite.js";
+
+const started = performance.now();
+const element = document.getElementById("ds");
+const $ = (id) => document.getElementById(id);
+
+// Count anything fetched from another host - there should never be any
+let external = 0;
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (new URL(entry.name, location.href).origin != location.origin) {
+      $("fact-external").textContent = ++external;
+    }
+  }
+}).observe({ type: "resource", buffered: true });
+
+element.addEventListener("datasette-ready", (event) => {
+  $("fact-datasette").textContent = event.detail.datasette;
+  $("fact-python").textContent = event.detail.python;
+  $("fact-time").textContent = ((performance.now() - started) / 1000).toFixed(1) + "s";
+  for (const id of ["run", "file", "download"]) $(id).disabled = false;
+});
+element.addEventListener("datasette-navigate", (event) => {
+  $("path").textContent = event.detail.path;
+});
+
+$("run").addEventListener("click", async () => {
+  const result = $("result");
+  result.hidden = false;
+  try {
+    result.textContent = JSON.stringify(await element.query($("sql").value, { database: "demo" }), null, 2);
+  } catch (error) {
+    result.textContent = "Error: " + error.message;
+  }
+});
+$("file").addEventListener("change", async (event) => {
+  for (const file of event.target.files) {
+    await element.addFile(file).catch((error) => alert(error.message));
+  }
+});
+$("download").addEventListener("click", async () => {
+  const bytes = await element.readDatabase("demo");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.sqlite3" }));
+  link.download = "demo.db";
+  link.click();
+});
+</script>
+</body>
+</html>
