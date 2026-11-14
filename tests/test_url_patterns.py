@@ -288,6 +288,8 @@ def test_load_buttons(page, static_server):
     expect(buttons.first).to_have_css("border-radius", "5px")
     expect(buttons.first).to_have_css("background-color", "rgb(255, 255, 255)")
     expect(buttons.first).to_have_css("color", "rgb(36, 70, 93)")
+    # The copy pinned to the loading screen went away with the loading screen
+    expect(page.locator("#shell-footer")).to_be_hidden()
     csv_url = static_server + "/" + F + "items.csv"
     page.once("dialog", lambda dialog: dialog.accept(csv_url))
     frame.locator("#load-custom button.csv-url").click()
@@ -342,6 +344,52 @@ def test_loading_screen_fits_a_phone(browser, static_server):
         assert page.evaluate(
             "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
         ), "the loading screen scrolls sideways"
+    finally:
+        context.close()
+
+
+def test_load_buttons_on_loading_screen(browser, static_server):
+    "The buttons are pinned to the bottom of the loading screen and work from there"
+    # Its own context: a phone-sized one, where pyodide.js never arrives so
+    # the page stays on the loading screen
+    context = browser.new_context(
+        viewport={"width": 375, "height": 700}, is_mobile=True, has_touch=True
+    )
+    try:
+        context.route("**/pyodide.js", lambda route: None)
+        page = context.new_page()
+        page.goto(static_server + "/?memory=1")
+        expect(page.locator("#loading-indicator h1")).to_be_visible()
+        buttons = page.locator("#shell-footer #load-custom button")
+        expect(buttons).to_have_text(
+            ["Load SQLite DB by URL", "Load CSV", "Load JSON", "Load Parquet", "Load SQL"]
+        )
+        expect(buttons.first).to_have_css("border-radius", "5px")
+        # All in view without scrolling, at the bottom of the window
+        for button in buttons.all():
+            expect(button).to_be_in_viewport(ratio=1)
+        expect(page.locator("#shell-footer a")).to_be_in_viewport(ratio=1)
+        footer_bottom = "document.getElementById('shell-footer').getBoundingClientRect().bottom"
+        assert page.evaluate(footer_bottom) == 700
+        # A page longer than the window scrolls behind the buttons, which stay
+        # where they are and do not cover the end of it
+        page.evaluate("for (let i = 0; i < 40; i++) { log('Installing package-' + i) }")
+        page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+        assert page.evaluate("window.scrollY") > 0
+        assert page.evaluate(footer_bottom) == 700
+        assert page.evaluate(
+            "document.getElementById('loading-note').getBoundingClientRect().bottom"
+            " <= document.getElementById('shell-footer').getBoundingClientRect().top"
+        ), "the buttons cover the end of the loading screen"
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        ), "the loading screen scrolls sideways"
+        # No need to wait for Datasette to start before loading something else
+        csv_url = static_server + "/" + F + "items.csv"
+        page.once("dialog", lambda dialog: dialog.accept(csv_url))
+        page.locator("#shell-footer button.csv-url").click()
+        page.wait_for_url("**/?csv=*")
+        assert page.url == static_server + "/?csv=" + quote(csv_url, safe="")
     finally:
         context.close()
 

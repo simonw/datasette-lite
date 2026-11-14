@@ -425,7 +425,10 @@ const LOAD_BUTTONS_CSS = `
 }
 `;
 
-function addLoadButtons(doc) {
+// Added to the end of every page Datasette renders, and to the footer of the
+// loading screen - there is no need to wait for Datasette to start before
+// loading something else, and after a failed load they are the way out.
+function addLoadButtons(doc, parent) {
   if (doc.getElementById("load-custom")) {
     return;
   }
@@ -460,10 +463,12 @@ function addLoadButtons(doc) {
   docs.textContent = "Documentation";
   // No colour of its own: it takes Datasette's link colours
   form.appendChild(docs);
-  doc.body.appendChild(form);
+  (parent || doc.body).appendChild(form);
 }
 
 // --- Boot ----------------------------------------------------------------------
+
+addLoadButtons(document, document.getElementById("shell-footer"));
 
 async function main() {
   await Promise.all([registerServiceWorker(), workerReady]);
