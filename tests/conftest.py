@@ -5,6 +5,7 @@ import shutil
 import socket
 import sqlite3
 import time
+import zipfile
 from http.client import HTTPConnection
 from subprocess import Popen, DEVNULL
 
@@ -44,6 +45,44 @@ def generated_fixtures():
     for name in ("extension.sqlite", "dotted.name.db"):
         shutil.copyfile(generated / "demo.db", generated / name)
     return generated
+
+
+def build_wheel(directory, name, module_path, version="0.1"):
+    """Package a single-module Datasette plugin as a wheel, so that it can be
+    installed with ?install=<url> like a plugin from PyPI. Returns the wheel's
+    file name. A wheel is a zip file - no build tool needed."""
+    module_path = pathlib.Path(module_path)
+    module = module_path.stem
+    dist = name.replace("-", "_")
+    info = "{}-{}.dist-info".format(dist, version)
+    files = {
+        module_path.name: module_path.read_text(),
+        info + "/METADATA": "Metadata-Version: 2.1\nName: {}\nVersion: {}\n".format(name, version),
+        info + "/WHEEL": (
+            "Wheel-Version: 1.0\nGenerator: datasette-lite-tests\n"
+            "Root-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+        info + "/entry_points.txt": "[datasette]\n{} = {}\n".format(module, module),
+    }
+    files[info + "/RECORD"] = "".join(
+        "{},,\n".format(path) for path in list(files) + [info + "/RECORD"]
+    )
+    wheel = "{}-{}-py3-none-any.whl".format(dist, version)
+    with zipfile.ZipFile(pathlib.Path(directory) / wheel, "w") as archive:
+        for path, content in files.items():
+            archive.writestr(path, content)
+    return wheel
+
+
+@pytest.fixture(scope="session")
+def stream_plugin(generated_fixtures, static_server):
+    "URL of a wheel of tests/plugins/datasette_lite_test_stream.py, for ?install="
+    wheel = build_wheel(
+        generated_fixtures,
+        "datasette-lite-test-stream",
+        root / "tests" / "plugins" / "datasette_lite_test_stream.py",
+    )
+    return "{}/tests/fixtures/generated/{}".format(static_server, wheel)
 
 
 @pytest.fixture(scope="session")

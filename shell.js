@@ -99,6 +99,8 @@ function showError(message) {
 
 // A module worker: Pyodide is loaded with import(), see webworker.js
 const datasetteWorker = new Worker("webworker.js", {type: "module"});
+// Requests the worker has not finished answering: id -> {port, streaming}.
+// port is the MessagePort the service worker is waiting on for the reply.
 const pending = new Map();
 let nextId = 1;
 
@@ -113,26 +115,56 @@ const workerReady = new Promise((resolve, reject) => {
       resolve();
     } else if (data.type == "error") {
       reject(new Error(data.error));
-    } else if (data.type == "response") {
-      const resolveResponse = pending.get(data.id);
-      pending.delete(data.id);
-      resolveResponse && resolveResponse(data);
+    } else {
+      onWorkerResponse(data);
     }
   };
 });
+
+// A response is either a single "response" message, or - when Datasette sends
+// it in several pieces, as it does for server-sent events - "response-start",
+// any number of "response-chunk" and then "response-end". Each is passed
+// straight on to the service worker, so the page sees a streamed response as
+// it is produced.
+function onWorkerResponse(data) {
+  const request = pending.get(data.id);
+  if (!request) {
+    return;
+  }
+  if (data.type == "response") {
+    pending.delete(data.id);
+    request.port.postMessage(
+      {status: data.status, headers: data.headers, body: data.body},
+      data.body ? [data.body] : [],
+    );
+  } else if (data.type == "response-start") {
+    request.streaming = true;
+    request.port.postMessage({status: data.status, headers: data.headers, stream: true});
+  } else if (data.type == "response-chunk") {
+    request.port.postMessage({chunk: data.chunk}, [data.chunk]);
+  } else if (data.type == "response-end") {
+    pending.delete(data.id);
+    request.port.postMessage(data.error ? {error: data.error} : {done: true});
+  }
+}
 
 // If the worker dies (out of memory, say) nothing will ever answer the
 // requests waiting on it, so fail them rather than leave them hanging.
 function failPending(reason) {
   const message = "Datasette Lite error: " + reason;
-  for (const resolveResponse of pending.values()) {
-    resolveResponse({
-      status: 500,
-      headers: [["content-type", "text/plain; charset=utf-8"]],
-      // An ArrayBuffer like any other response body - one per request, since
-      // it is transferred to the service worker
-      body: new TextEncoder().encode(message).buffer,
-    });
+  for (const request of pending.values()) {
+    if (request.streaming) {
+      // The status and headers have already gone: break off the response
+      request.port.postMessage({error: message});
+      continue;
+    }
+    // An ArrayBuffer like any other response body - one per request, since
+    // it is transferred to the service worker
+    const body = new TextEncoder().encode(message).buffer;
+    request.port.postMessage(
+      {status: 500, headers: [["content-type", "text/plain; charset=utf-8"]], body},
+      [body],
+    );
   }
   pending.clear();
 }
@@ -152,15 +184,22 @@ datasetteWorker.onmessageerror = () => {
 
 datasetteWorker.postMessage(startup);
 
-function callWorker(request) {
+// Have the worker answer a request, replying on port. stream says whether the
+// service worker can take the response in pieces - one from an older release
+// cannot, and is sent the whole response once it is complete, as before.
+function callWorker(request, port, stream) {
   const id = nextId++;
-  return new Promise((resolve) => {
-    pending.set(id, resolve);
-    datasetteWorker.postMessage(
-      {type: "request", id, ...request},
-      request.body ? [request.body] : [],
-    );
-  });
+  pending.set(id, {port, streaming: false});
+  port.onmessage = (event) => {
+    if (event.data && event.data.cancel && pending.delete(id)) {
+      // The page stopped reading a streamed response: let Datasette know
+      datasetteWorker.postMessage({type: "cancel", id});
+    }
+  };
+  datasetteWorker.postMessage(
+    {type: "request", id, stream: !!stream, ...request},
+    request.body ? [request.body] : [],
+  );
 }
 
 // --- The service worker ------------------------------------------------------
@@ -171,12 +210,7 @@ function onServiceWorkerMessage(event) {
   if (data.type == "datasette-lite-owner") {
     port.postMessage({owner: data.session === SESSION, protocol: PROTOCOL});
   } else if (data.type == "datasette-lite-request" && data.session === SESSION) {
-    callWorker(data.request).then((response) => {
-      port.postMessage(
-        {status: response.status, headers: response.headers, body: response.body},
-        response.body ? [response.body] : [],
-      );
-    });
+    callWorker(data.request, port, data.stream);
   }
 }
 
@@ -225,9 +259,22 @@ function frameAppPath() {
     if (!isAppPath(loc.pathname)) {
       return null;
     }
-    return (loc.pathname.slice(APP_ROOT.length) || "/") + loc.search;
+    // Includes the page's own #fragment, where plugins such as datasette-vega
+    // keep their state - it ends up as a second # in the shell's fragment
+    return (loc.pathname.slice(APP_ROOT.length) || "/") + loc.search + loc.hash;
   } catch (e) {
     return null;
+  }
+}
+
+function mirrorFrameInHash() {
+  const path = frameAppPath();
+  if (path !== null) {
+    const newHash = "#" + path;
+    if (location.hash !== newHash) {
+      // replaceState: the iframe navigation already created a history entry
+      history.replaceState(null, "", newHash);
+    }
   }
 }
 
@@ -241,7 +288,9 @@ function navigateFrame(path, replace) {
 }
 
 window.addEventListener("hashchange", () => {
-  // The user edited the #fragment, or went back/forward to a #fragment change
+  // The user edited the #fragment, or went back/forward to a #fragment change.
+  // When only the page's own fragment differs, replace() is a same-document
+  // navigation and the iframe doesn't reload.
   const path = pathFromHash();
   if (frameAppPath() !== path) {
     navigateFrame(path, true);
@@ -277,14 +326,10 @@ frame.addEventListener("load", () => {
     location.href = href;
     return;
   }
-  const path = frameAppPath();
-  if (path !== null) {
-    const newHash = "#" + path;
-    if (location.hash !== newHash) {
-      // replaceState: the iframe navigation already created a history entry
-      history.replaceState(null, "", newHash);
-    }
-  }
+  mirrorFrameInHash();
+  // A #fragment change within the page doesn't fire "load". This is a new
+  // window object for every page load, so the listener is never doubled up.
+  frame.contentWindow.addEventListener("hashchange", mirrorFrameInHash);
   document.title = (doc && doc.title) || "Datasette";
   if (doc && doc.contentType == "text/html" && doc.body) {
     enhanceDocument(doc);

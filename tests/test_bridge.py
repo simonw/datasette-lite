@@ -342,3 +342,163 @@ def test_rewritten_body_is_sent_as_one_message(bridge):
     run(app({"type": "http", "method": "GET", "path": "/app/s1/"}, receive, send))
     bodies = [m for m in messages if m["type"] == "http.response.body"]
     assert bodies == [{"type": "http.response.body", "body": b"<p>one two three</p>", "more_body": False}]
+
+
+# --- Streamed responses -------------------------------------------------------
+
+
+def sse_app(events, delay=0.05, observed=None, set_cookies=()):
+    "Sends each event as its own body message, as Datasette's AsgiStream does"
+
+    async def app(scope, receive, send):
+        await receive()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")]
+                + [(b"set-cookie", c.encode()) for c in set_cookies],
+            }
+        )
+        if observed is not None:
+            # A real server answers receive() once the client has gone
+            async def watch():
+                observed.append((await receive())["type"])
+
+            watcher = asyncio.ensure_future(watch())
+        for event in events:
+            await send({"type": "http.response.body", "body": event, "more_body": True})
+            await asyncio.sleep(delay)
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+        if observed is not None:
+            await watcher
+
+    return app
+
+
+def stream_recorder(bridge):
+    "A ResponseStream that records what it is given, and when"
+    calls = []
+    stream = bridge["ResponseStream"](
+        lambda status, headers: calls.append(("start", status, headers)),
+        lambda chunk: calls.append(("chunk", chunk, asyncio.get_event_loop().time())),
+    )
+    return stream, calls
+
+
+def test_response_in_pieces_is_streamed(bridge):
+    b = bridge["ASGIBridge"](sse_app([b"data: one\n\n", b"data: two\n\n", b"data: three\n\n"]))
+
+    async def go():
+        stream, calls = stream_recorder(bridge)
+        started = asyncio.get_event_loop().time()
+        response = await b.handle("POST", "/app/x/-/stream", "", [], stream=stream)
+        return response, calls, started
+
+    response, calls, started = run(go())
+    assert response["streamed"] is True
+    assert response["status"] == 200
+    assert response["body"] == b""
+    assert calls[0] == ("start", 200, [["content-type", "text/event-stream"]])
+    chunks = [call for call in calls[1:] if call[0] == "chunk"]
+    assert b"".join(chunk for _, chunk, _ in chunks) == b"data: one\n\ndata: two\n\ndata: three\n\n"
+    # Delivered as they were produced, not all together at the end
+    assert len(chunks) == 3
+    assert chunks[0][2] - started < 0.05
+    assert chunks[-1][2] - chunks[0][2] > 0.08
+
+
+def test_response_in_one_piece_is_not_streamed(bridge):
+    b = bridge["ASGIBridge"](make_echo_app())
+
+    async def go():
+        stream, calls = stream_recorder(bridge)
+        return await b.handle("GET", "/app/x/", "", [], stream=stream), calls
+
+    response, calls = run(go())
+    assert calls == []
+    assert "streamed" not in response
+    assert response["body"].startswith(b"GET /app/x/")
+
+
+def test_response_in_pieces_is_buffered_without_a_stream(bridge):
+    b = bridge["ASGIBridge"](sse_app([b"one ", b"two ", b"three"], delay=0))
+    response = run(b.handle("GET", "/app/x/-/stream", "", []))
+    assert "streamed" not in response
+    assert response["body"] == b"one two three"
+
+
+def test_streamed_response_stores_cookies(bridge):
+    b = bridge["ASGIBridge"](sse_app([b"data: one\n\n"], set_cookies=["seen=yes; Path=/"]))
+
+    async def go():
+        stream, calls = stream_recorder(bridge)
+        await b.handle("GET", "/app/x/-/stream", "", [], stream=stream)
+        return calls
+
+    calls = run(go())
+    # Kept in the jar, never sent on to the service worker
+    assert b.cookies.as_dict() == {"seen": "yes"}
+    assert calls[0] == ("start", 200, [["content-type", "text/event-stream"]])
+
+
+def test_pieces_sent_together_are_combined(bridge):
+    rows = [b"%d,row\n" % i for i in range(1000)]
+    b = bridge["ASGIBridge"](sse_app(rows, delay=0))
+
+    async def go():
+        stream, calls = stream_recorder(bridge)
+        await b.handle("GET", "/app/x/data.csv", "", [], stream=stream)
+        return calls
+
+    calls = run(go())
+    chunks = [call[1] for call in calls if call[0] == "chunk"]
+    assert b"".join(chunks) == b"".join(rows)
+    assert len(chunks) < 10
+
+
+def test_large_stream_is_passed_on_before_it_is_complete(bridge):
+    Stream = bridge["ResponseStream"]
+    rows = [b"x" * 1024] * 200
+
+    async def go():
+        calls = []
+        stream = Stream(lambda *args: None, calls.append)
+        stream.start(200, [])
+        for row in rows:
+            # Never yields to the event loop, as a query run inline does not
+            stream.write(row)
+        before_flush = len(calls)
+        stream.flush()
+        return before_flush, calls
+
+    before_flush, chunks = run(go())
+    assert before_flush == 3
+    assert all(len(chunk) == Stream.FLUSH_BYTES for chunk in chunks[:3])
+    assert b"".join(chunks) == b"".join(rows)
+
+
+def test_disconnect_reaches_the_app_and_stops_delivery(bridge):
+    observed = []
+    events = [b"data: %d\n\n" % i for i in range(10)]
+    b = bridge["ASGIBridge"](sse_app(events, observed=observed))
+
+    async def go():
+        stream, calls = stream_recorder(bridge)
+        task = asyncio.ensure_future(
+            b.handle("GET", "/app/x/-/stream", "", [], stream=stream)
+        )
+        await asyncio.sleep(0.12)
+        seen_before = len(calls)
+        stream.disconnect()
+        await asyncio.sleep(0.01)
+        told = list(observed)
+        # The app carries on to the end; nothing more is delivered
+        response = await task
+        return seen_before, calls, told, response
+
+    seen_before, calls, told, response = run(go())
+    assert told == ["http.disconnect"]
+    assert 1 < seen_before < 6
+    assert len(calls) == seen_before
+    assert response["streamed"] is True

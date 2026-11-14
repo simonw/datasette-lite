@@ -230,6 +230,28 @@ def test_editing_hash_navigates(page, static_server):
     expect(frame.locator("tbody tr")).to_have_count(1)
 
 
+def test_iframe_fragment_is_kept_in_hash(page, static_server):
+    "Plugins such as datasette-vega keep their state in the page's own #fragment"
+    frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items?_size=1#g.mark=bar")
+    expect(frame.locator("tbody tr")).to_have_count(1)
+    # The shell's load handler sets the title - after that the fragment must survive
+    expect(page).to_have_title(re.compile("^data: items"))
+    assert datasette_frame(page).evaluate("location.hash") == "#g.mark=bar"
+    assert app_path(page) == "/data/items?_size=1#g.mark=bar"
+    # A fragment change inside the page is mirrored in the address bar
+    datasette_frame(page).evaluate("window.notReloaded = true; location.hash = 'g.mark=line'")
+    wait_for_hash(page, r"^/data/items\?_size=1#g\.mark=line$")
+    # Editing just the fragment in the address bar updates the page without reloading it
+    page.evaluate("location.hash = '#/data/items?_size=1#g.mark=circle'")
+    page.wait_for_function(
+        "document.getElementById('datasette').contentWindow.location.hash === '#g.mark=circle'"
+    )
+    assert datasette_frame(page).evaluate("window.notReloaded") is True
+    # Navigating to a page without a fragment drops it again
+    datasette_frame(page).evaluate("location.href = location.pathname + '?_size=2'")
+    wait_for_hash(page, r"^/data/items\?_size=2$")
+
+
 def test_get_form_submission(page, static_server):
     "The table filter form is a GET form"
     frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")

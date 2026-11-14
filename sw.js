@@ -185,8 +185,24 @@ async function handleAppRequest(request, session) {
 
   const channel = new MessageChannel();
   let timer;
+  // The first message is the reply: {status, headers, body}, or - for a
+  // response Datasette sends in pieces, such as server-sent events -
+  // {status, headers, stream: true}, which is followed by any number of
+  // {chunk} messages and then {done: true} or {error}.
+  let onStreamMessage = null;
+  const earlyStreamMessages = [];
   const reply = new Promise((resolve) => {
-    channel.port1.onmessage = (event) => resolve(event.data);
+    let replied = false;
+    channel.port1.onmessage = (event) => {
+      if (!replied) {
+        replied = true;
+        resolve(event.data);
+      } else if (onStreamMessage) {
+        onStreamMessage(event.data || {});
+      } else {
+        earlyStreamMessages.push(event.data || {});
+      }
+    };
     // The owner can vanish mid-request (tab closed or reloaded, worker
     // killed), in which case no reply ever arrives.
     timer = setTimeout(() => resolve(null), REPLY_TIMEOUT_MS);
@@ -195,13 +211,18 @@ async function handleAppRequest(request, session) {
     {
       type: "datasette-lite-request",
       session,
+      // This service worker can relay a streamed response. An optional field:
+      // a shell from before streaming ignores it and replies in one message.
+      stream: true,
       request: {method: request.method, url: request.url, headers, body},
     },
     body ? [channel.port2, body] : [channel.port2],
   );
   const msg = await reply;
   clearTimeout(timer);
-  channel.port1.close();
+  if (!msg || !msg.stream) {
+    channel.port1.close();
+  }
   if (!msg) {
     return new Response(
       "Datasette Lite did not answer this request in time - " +
@@ -235,5 +256,36 @@ async function handleAppRequest(request, session) {
   }
   const status = msg.status;
   const nullBody = [101, 204, 205, 304].includes(status) || request.method === "HEAD";
-  return new Response(nullBody ? null : msg.body, {status, headers: responseHeaders});
+  let responseBody = msg.body;
+  if (msg.stream) {
+    const port = channel.port1;
+    const cancel = () => {
+      // Nobody is reading: tell the shell, which tells Datasette
+      port.postMessage({cancel: true});
+      port.close();
+    };
+    if (nullBody) {
+      cancel();
+    } else {
+      responseBody = new ReadableStream({
+        start(controller) {
+          onStreamMessage = (data) => {
+            if (data.chunk) {
+              controller.enqueue(new Uint8Array(data.chunk));
+            } else if (data.done) {
+              controller.close();
+              port.close();
+            } else if (data.error) {
+              controller.error(new Error(data.error));
+              port.close();
+            }
+          };
+          earlyStreamMessages.splice(0).forEach(onStreamMessage);
+        },
+        // The page aborted the fetch(), or navigated away
+        cancel,
+      });
+    }
+  }
+  return new Response(nullBody ? null : responseBody, {status, headers: responseHeaders});
 }
