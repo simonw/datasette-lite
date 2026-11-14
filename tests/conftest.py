@@ -140,6 +140,10 @@ def boot(page: Page, url: str, wait_for="footer"):
     frame = page.frame_locator("#datasette")
     if wait_for:
         expect(frame.locator(wait_for).first).to_be_attached(timeout=60 * 1000)
+    # The page mirrors the iframe's path into its #fragment when the iframe's
+    # load event fires, which is after its content can be found. Without this
+    # a test that reads the #fragment straight away sometimes finds it empty.
+    page.wait_for_function("location.hash.length > 1", timeout=60 * 1000)
     return frame
 
 
