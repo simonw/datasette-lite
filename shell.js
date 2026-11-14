@@ -225,9 +225,22 @@ function frameAppPath() {
     if (!isAppPath(loc.pathname)) {
       return null;
     }
-    return (loc.pathname.slice(APP_ROOT.length) || "/") + loc.search;
+    // Includes the page's own #fragment, where plugins such as datasette-vega
+    // keep their state - it ends up as a second # in the shell's fragment
+    return (loc.pathname.slice(APP_ROOT.length) || "/") + loc.search + loc.hash;
   } catch (e) {
     return null;
+  }
+}
+
+function mirrorFrameInHash() {
+  const path = frameAppPath();
+  if (path !== null) {
+    const newHash = "#" + path;
+    if (location.hash !== newHash) {
+      // replaceState: the iframe navigation already created a history entry
+      history.replaceState(null, "", newHash);
+    }
   }
 }
 
@@ -241,7 +254,9 @@ function navigateFrame(path, replace) {
 }
 
 window.addEventListener("hashchange", () => {
-  // The user edited the #fragment, or went back/forward to a #fragment change
+  // The user edited the #fragment, or went back/forward to a #fragment change.
+  // When only the page's own fragment differs, replace() is a same-document
+  // navigation and the iframe doesn't reload.
   const path = pathFromHash();
   if (frameAppPath() !== path) {
     navigateFrame(path, true);
@@ -277,14 +292,10 @@ frame.addEventListener("load", () => {
     location.href = href;
     return;
   }
-  const path = frameAppPath();
-  if (path !== null) {
-    const newHash = "#" + path;
-    if (location.hash !== newHash) {
-      // replaceState: the iframe navigation already created a history entry
-      history.replaceState(null, "", newHash);
-    }
-  }
+  mirrorFrameInHash();
+  // A #fragment change within the page doesn't fire "load". This is a new
+  // window object for every page load, so the listener is never doubled up.
+  frame.contentWindow.addEventListener("hashchange", mirrorFrameInHash);
   document.title = (doc && doc.title) || "Datasette";
   if (doc && doc.contentType == "text/html" && doc.body) {
     enhanceDocument(doc);
