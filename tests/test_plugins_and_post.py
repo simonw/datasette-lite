@@ -94,6 +94,35 @@ def test_csv_download(page, static_server):
     assert "Gadget" in content
 
 
+def test_export_dialog_download(page, static_server):
+    """Browsers request an <a download> link from the network, not the service
+    worker, so the shell fetches the file and saves it from a blob: URL"""
+    frame = boot(
+        page,
+        static_server + "/?csv=" + F + "items.csv#/data/-/query?sql=select+name,+qty+from+items",
+    )
+    frame.locator("button", has_text="Export").first.click()
+    # TSV: export-dialog.js clicks a link it makes, with an empty download attribute
+    with page.expect_download() as download_info:
+        frame.locator('[data-export-format="tsv"] [data-export-action="download"]').click()
+    download = download_info.value
+    assert download.url.startswith("blob:")
+    assert download.suggested_filename.endswith(".tsv")
+    lines = open(download.path()).read().splitlines()
+    assert lines[0] == "name\tqty"
+    assert len(lines) == 4
+    # JSON: a link in the page, with a file name of its own
+    link = frame.locator('[data-export-format="json"] [data-export-action="download"]').first
+    with page.expect_download() as download_info:
+        link.click()
+    download = download_info.value
+    assert download.url.startswith("blob:")
+    assert download.suggested_filename == link.get_attribute("download")
+    assert len(json.load(open(download.path()))["rows"]) == 3
+    # Still on the page the dialog was opened from
+    assert app_path(page).startswith("/data/-/query?")
+
+
 # --- Plugins that ship JavaScript -----------------------------------------------
 
 
