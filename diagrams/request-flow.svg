@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 590" width="980" height="590" role="img" aria-label="Numbered request path drawn on the real layout: the iframe sits inside the outer page, the service worker below, the Web Worker beside." font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>Numbered request path drawn on the real layout: the iframe sits inside the outer page, the service worker below, the Web Worker beside.</title>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f2328"/></marker><marker id="as" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#1f2328"/></marker></defs>
+<rect width="980" height="590" rx="10" fill="#ffffff"/>
+<text x="30" y="38" font-size="15" text-anchor="start" fill="#1f2328" font-weight="600">What happens when you click a link in Datasette Lite</text>
+<polyline points="700,34 740,34" fill="none" stroke="#1f2328" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="750" y="38" font-size="12" text-anchor="start" fill="#59636e">request</text>
+<polyline points="820,34 860,34" fill="none" stroke="#1f2328" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a)"/>
+<text x="870" y="38" font-size="12" text-anchor="start" fill="#59636e">response</text>
+<rect x="30" y="60" width="470" height="220" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+<text x="46" y="87" font-size="14" text-anchor="start" fill="#1f2328" font-weight="600"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.9">index.html</tspan>: the page you opened</text>
+<text x="46" y="108" font-size="12" text-anchor="start" fill="#59636e">Each tab picks a random <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.0">&lt;session&gt;</tspan> and starts one Web Worker.</text>
+<rect x="50" y="150" width="250" height="110" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="1.5"/>
+<text x="66" y="178" font-size="13" text-anchor="start" fill="#1f2328" font-weight="600"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">&lt;iframe&gt;</tspan></text>
+<text x="66" y="200" font-size="12.5" text-anchor="start" fill="#1f2328">Datasette pages at</text>
+<text x="66" y="218" font-size="12.5" text-anchor="start" fill="#1f2328"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5">/app/&lt;session&gt;/…</tspan></text>
+<rect x="330" y="150" width="150" height="110" rx="8" fill="#ffffff" stroke="#59636e" stroke-width="1.5"/>
+<text x="346" y="178" font-size="13" text-anchor="start" fill="#1f2328" font-weight="600"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">shell.js</tspan></text>
+<text x="346" y="200" font-size="12.5" text-anchor="start" fill="#1f2328">the page's own</text>
+<text x="346" y="218" font-size="12.5" text-anchor="start" fill="#1f2328">script: relays</text>
+<rect x="30" y="350" width="470" height="74" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="46" y="378" font-size="14" text-anchor="start" fill="#1f2328" font-weight="600"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.9">sw.js</tspan>: the service worker</text>
+<text x="46" y="400" font-size="12.5" text-anchor="start" fill="#1f2328">Intercepts requests for <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5">/app/&lt;session&gt;/…</tspan>.</text>
+<rect x="640" y="60" width="310" height="220" rx="8" fill="#dafbe1" stroke="#1a7f37" stroke-width="1.5"/>
+<text x="656" y="87" font-size="14" text-anchor="start" fill="#1f2328" font-weight="600"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.9">webworker.js</tspan>: a Web Worker</text>
+<text x="656" y="108" font-size="12" text-anchor="start" fill="#59636e">Pyodide: Python in WebAssembly</text>
+<rect x="656" y="122" width="278" height="38" rx="6" fill="#ffffff" stroke="#59636e" stroke-width="1"/>
+<text x="795" y="146" font-size="13" text-anchor="middle" fill="#1f2328">ASGI bridge + cookie jar</text>
+<rect x="656" y="172" width="278" height="38" rx="6" fill="#ffffff" stroke="#59636e" stroke-width="1"/>
+<text x="795" y="196" font-size="13" text-anchor="middle" fill="#1f2328">Datasette ASGI app</text>
+<rect x="656" y="222" width="278" height="38" rx="6" fill="#ffffff" stroke="#59636e" stroke-width="1"/>
+<text x="795" y="246" font-size="13" text-anchor="middle" fill="#1f2328">SQLite databases</text>
+<polyline points="165,260 165,350" fill="none" stroke="#1f2328" stroke-width="1.5" marker-end="url(#a)"/>
+<circle cx="145" cy="316" r="10" fill="#1f2328"/>
+<text x="145" y="320" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">1</text>
+<polyline points="215,350 215,260" fill="none" stroke="#1f2328" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a)"/>
+<circle cx="235" cy="316" r="10" fill="#1f2328"/>
+<text x="235" y="320" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">7</text>
+<polyline points="385,350 385,260" fill="none" stroke="#1f2328" stroke-width="1.5" marker-end="url(#a)"/>
+<circle cx="365" cy="316" r="10" fill="#1f2328"/>
+<text x="365" y="320" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">2</text>
+<polyline points="435,260 435,350" fill="none" stroke="#1f2328" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a)"/>
+<circle cx="455" cy="316" r="10" fill="#1f2328"/>
+<text x="455" y="320" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">6</text>
+<polyline points="480,185 640,185" fill="none" stroke="#1f2328" stroke-width="1.5" marker-end="url(#a)"/>
+<circle cx="570" cy="167" r="10" fill="#1f2328"/>
+<text x="570" y="171" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">3</text>
+<polyline points="640,225 480,225" fill="none" stroke="#1f2328" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a)"/>
+<circle cx="570" cy="243" r="10" fill="#1f2328"/>
+<text x="570" y="247" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">5</text>
+<circle cx="928" cy="82" r="10" fill="#1f2328"/>
+<text x="928" y="86" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">4</text>
+<circle cx="40" cy="462" r="10" fill="#1f2328"/>
+<text x="40" y="466" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">1</text>
+<text x="60" y="466" font-size="13" text-anchor="start" fill="#1f2328">The page requests <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">/app/&lt;session&gt;/fixtures</tspan>.</text>
+<circle cx="40" cy="494" r="10" fill="#1f2328"/>
+<text x="40" y="498" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">2</text>
+<text x="60" y="498" font-size="13" text-anchor="start" fill="#1f2328"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">sw.js</tspan> intercepts it and posts it to the owning tab.</text>
+<circle cx="40" cy="526" r="10" fill="#1f2328"/>
+<text x="40" y="530" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">3</text>
+<text x="60" y="530" font-size="13" text-anchor="start" fill="#1f2328"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">shell.js</tspan> forwards it to the Web Worker.</text>
+<circle cx="40" cy="558" r="10" fill="#1f2328"/>
+<text x="40" y="562" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">4</text>
+<text x="60" y="562" font-size="13" text-anchor="start" fill="#1f2328">Python adds cookies and calls Datasette, which queries SQLite.</text>
+<circle cx="520" cy="462" r="10" fill="#1f2328"/>
+<text x="520" y="466" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">5</text>
+<text x="540" y="466" font-size="13" text-anchor="start" fill="#1f2328">The status, headers and body return to the page,</text>
+<circle cx="520" cy="494" r="10" fill="#1f2328"/>
+<text x="520" y="498" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">6</text>
+<text x="540" y="498" font-size="13" text-anchor="start" fill="#1f2328">then to <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">sw.js</tspan> over a <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">MessagePort</tspan>,</text>
+<circle cx="520" cy="526" r="10" fill="#1f2328"/>
+<text x="520" y="530" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">7</text>
+<text x="540" y="530" font-size="13" text-anchor="start" fill="#1f2328">which hands the browser a <tspan font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.0">Response</tspan>. The iframe renders it.</text>
+</svg>
