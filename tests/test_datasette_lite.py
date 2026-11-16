@@ -33,7 +33,7 @@ def test_loading_screen_listed_the_startup_steps(dslite: Page):
     assert steps[-1] == "Starting Datasette"
     downloads = [
         "Downloading https://latest.datasette.io/fixtures.db",
-        "Downloading https://datasette.io/content.db",
+        "Downloading https://datasette-io-files.s3.amazonaws.com/content.db",
     ]
     for step in downloads + ["Loading micropip and setuptools"]:
         assert step in steps

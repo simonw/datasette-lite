@@ -1298,7 +1298,7 @@ async function startDatasette(settings) {
   }
   if (shouldLoadDefaults) {
     toLoad.push(["fixtures.db", "https://latest.datasette.io/fixtures.db"]);
-    toLoad.push(["content.db", "https://datasette.io/content.db"]);
+    toLoad.push(["content.db", "https://datasette-io-files.s3.amazonaws.com/content.db"]);
   }
   // Start every download now, alongside Pyodide. None of them needs Python,
   // and waiting for them is most of what a first visit spends its time on.
