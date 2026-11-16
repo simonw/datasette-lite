@@ -293,6 +293,24 @@ def test_hardcoded_root_relative_attributes(bridge):
     )
 
 
+def test_large_body_without_hardcoded_attributes_is_fast(bridge):
+    # 40MB that is nearly all whitespace, as a padded text table in a
+    # <textarea> is: the attribute regular expression takes over a second to
+    # search this, so it must not be run when there is nothing for it to find
+    import time
+
+    body = b"<textarea>" + (b" " * 4000 + b"|\n") * 10000 + b"</textarea>"
+    start = time.perf_counter()
+    r = call(bridge, html_app(body), "/app/s1/")
+    elapsed = time.perf_counter() - start
+    assert r["body"] == body
+    assert elapsed < 0.5
+    # Either kind of quote still gets the body rewritten
+    for quote in (b'"', b"'"):
+        r = call(bridge, html_app(b"<a href=" + quote + b"/-/x" + quote + b">"), "/app/s1/")
+        assert r["body"] == b"<a href=" + quote + b"/app/s1/-/x" + quote + b">"
+
+
 def chunked_html_app(chunks):
     async def app(scope, receive, send):
         await send(

@@ -560,9 +560,13 @@ def datasette_base_url_fixes(app, base_url):
                     # action="/-/password-tool". If Datasette Lite is served
                     # from a subdirectory those navigations would escape the
                     # service worker's scope entirely, so fix them here.
-                    body = HARDCODED_ATTRIBUTE_RE.sub(
-                        lambda m: m.group(1) + prefix + b"/-/", body
-                    )
+                    # The regular expression is slow - seconds, for a page
+                    # of tens of megabytes - so it is only run on a body
+                    # that has something in it for it to match.
+                    if b'="/-/' in body or b"='/-/" in body:
+                        body = HARDCODED_ATTRIBUTE_RE.sub(
+                            lambda m: m.group(1) + prefix + b"/-/", body
+                        )
                 await send({**message, "body": body})
             else:
                 await send(message)
