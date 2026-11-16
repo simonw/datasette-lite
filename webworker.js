@@ -12,6 +12,14 @@
 
 const PYODIDE_VERSION = "314.0.8";
 const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+// ?sqlite=3.54.1 swaps the SQLite built into Pyodide for that version, using
+// a pysqlite3 wheel built by https://github.com/datasette/pysqlite3-wasm-wheels
+// wheels.json at this URL lists the wheels, with paths relative to it.
+const SQLITE_WHEELS_URL = "https://datasette.github.io/pysqlite3-wasm-wheels/";
+// The wheel tags for PYODIDE_VERSION. A wheel works on any Pyodide release
+// that has these tags, not only the one it was built against.
+const PYODIDE_PYTHON_TAG = "cp314";
+const PYODIDE_PLATFORM_TAG = "pyemscripten_2026_0_wasm32";
 // ?ref=main (or any other branch, tag or commit) runs Datasette from a zip of
 // its source on GitHub. GitHub does not serve those zips with CORS headers,
 // so they are fetched through this proxy, which adds them:
@@ -151,6 +159,77 @@ function isGitRef(ref) {
   return /^[A-Za-z0-9._\/-]{1,200}$/.test(ref) &&
     ref.split("/").every(part => part !== "" && !part.startsWith("."));
 }
+
+// JS-BEGIN sqlite
+// Is this ?sqlite= a SQLite version number - 3.54.1, 3.54, 3.8.11.1?
+function isSqliteVersion(value) {
+  return /^\d+\.\d+(\.\d+){0,2}$/.test(value);
+}
+
+function sqliteVersionError(value) {
+  return new Error(
+    `?sqlite=${value} is not a SQLite version number, e.g. ?sqlite=3.54.1`
+  );
+}
+
+// The wheel in wheels.json to use for ?sqlite=version on a Pyodide with these
+// tags. Where there are several, the one built most recently.
+function chooseSqliteWheel(index, version, pythonTag, platformTag) {
+  const wheels = ((index && index.wheels) || []).filter(
+    wheel => wheel.python_tag === pythonTag && wheel.platform_tag === platformTag
+  );
+  const matches = wheels.filter(wheel => wheel.sqlite_version === version);
+  if (!matches.length) {
+    // Most recent version first
+    const numbers = v => String(v).split(".").map(Number);
+    const available = [...new Set(wheels.map(wheel => wheel.sqlite_version))].sort(
+      (a, b) => {
+        const [x, y] = [numbers(a), numbers(b)];
+        for (let i = 0; i < Math.max(x.length, y.length); i++) {
+          if ((x[i] || 0) !== (y[i] || 0)) {
+            return (y[i] || 0) - (x[i] || 0);
+          }
+        }
+        return 0;
+      }
+    );
+    throw new Error(
+      `?sqlite=${version} is not available: there is no SQLite ${version} ` +
+      `wheel for ${pythonTag} ${platformTag}. ` + (
+        available.length
+          ? `Available versions: ${available.join(", ")}`
+          : "No SQLite versions are available for it."
+      )
+    );
+  }
+  // Date.parse() rather than comparing strings, in case the format changes
+  const built = wheel => Date.parse(wheel.built) || 0;
+  return matches.reduce((best, wheel) => (built(wheel) > built(best) ? wheel : best));
+}
+
+// The URL of the wheel for ?sqlite=version, looked up in wheels.json
+async function findSqliteWheelUrl(version, baseUrl, pythonTag, platformTag) {
+  if (!isSqliteVersion(version)) {
+    throw sqliteVersionError(version);
+  }
+  const indexUrl = new URL("wheels.json", baseUrl).href;
+  let index;
+  try {
+    const response = await fetch(indexUrl);
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status);
+    }
+    index = await response.json();
+  } catch (error) {
+    throw new Error(
+      `?sqlite=${version} could not be used. Could not load ${indexUrl}: ` +
+      ((error && error.message) || error)
+    );
+  }
+  const wheel = chooseSqliteWheel(index, version, pythonTag, platformTag);
+  return new URL(wheel.path, baseUrl).href;
+}
+// JS-END sqlite
 
 function databaseFiles(sqliteUrls) {
   // Each database is saved as <name>.db, so <name> is what Datasette calls it.
@@ -762,8 +841,35 @@ def install_datasette_source(zip_bytes, site_packages):
     return version, dependencies, commit
 
 
+def use_pysqlite3_as_sqlite3():
+    """Make "import sqlite3" give pysqlite3, which has the SQLite version
+    that ?sqlite= asked for compiled in.
+
+    Datasette and sqlite-utils use pysqlite3 by themselves if it is
+    installed. Plugins do not, and nor does the code below that loads CSV
+    and SQL files: without this they would use the SQLite built into Pyodide,
+    and "except sqlite3.OperationalError" in a plugin would not catch an
+    error raised by pysqlite3."""
+    import sys
+    import pysqlite3
+    import pysqlite3.dbapi2
+    sys.modules["sqlite3"] = pysqlite3
+    sys.modules["sqlite3.dbapi2"] = pysqlite3.dbapi2
+
+
 import micropip
 import importlib, importlib.metadata
+if settings["sqlite_wheel_url"]:
+    # ?sqlite= - before Datasette is installed, and before anything has
+    # imported sqlite3
+    with step("Installing SQLite " + settings["sqlite_version"]):
+        try:
+            await micropip.install(settings["sqlite_wheel_url"])
+        except Exception as ex:
+            raise ValueError("?sqlite={} could not be used. Could not install {}: {}".format(
+                settings["sqlite_version"], settings["sqlite_wheel_url"], ex
+            ))
+        use_pysqlite3_as_sqlite3()
 with step("Installing Datasette") as install_step:
     # One call, so that all three are looked up and downloaded together.
     # They cannot go in the call that installs Datasette as well: micropip
@@ -1160,6 +1266,17 @@ async function startDatasette(settings) {
       );
     }
   }
+  // ?sqlite=3.54.1 - find the wheel for it while Pyodide loads. A value that
+  // is not a version number fails here, before anything is downloaded.
+  let sqliteWheelUrl = null;
+  if (settings.sqlite) {
+    if (!isSqliteVersion(settings.sqlite)) {
+      throw sqliteVersionError(settings.sqlite);
+    }
+    sqliteWheelUrl = findSqliteWheelUrl(
+      settings.sqlite, SQLITE_WHEELS_URL, PYODIDE_PYTHON_TAG, PYODIDE_PLATFORM_TAG
+    );
+  }
   const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);
   if (sqliteUrls.length) {
     toLoad.push(...databaseFiles(sqliteUrls));
@@ -1193,11 +1310,16 @@ async function startDatasette(settings) {
     settings.configUrl,
   ].forEach(prefetch);
   // "pyodide" is the step the loading screen starts out showing
-  const { loadPyodide } = await import(PYODIDE_URL + "pyodide.mjs");
-  self.pyodide = await loadPyodide({
-    indexURL: PYODIDE_URL,
-    fullStdLib: true
-  });
+  const loadingPyodide = (async () => {
+    const { loadPyodide } = await import(PYODIDE_URL + "pyodide.mjs");
+    return loadPyodide({
+      indexURL: PYODIDE_URL,
+      fullStdLib: true
+    });
+  })();
+  // Together, so that a ?sqlite= with no wheel is reported straight away
+  // rather than once Pyodide has loaded
+  [self.pyodide, sqliteWheelUrl] = await Promise.all([loadingPyodide, sqliteWheelUrl]);
   finishStep("pyodide");
   // One call, so the packages download together. setuptools is for
   // pkg_resources. What Pyodide reports as it loads them goes to the console.
@@ -1214,6 +1336,8 @@ async function startDatasette(settings) {
     datasette_source_url: datasetteSourceUrl,
     datasette_source_ref: datasetteSourceUrl ? settings.ref : null,
     pre,
+    sqlite_version: sqliteWheelUrl ? settings.sqlite : null,
+    sqlite_wheel_url: sqliteWheelUrl,
     install_urls: (settings.installUrls || []).filter(Boolean),
     metadata_url: settings.metadataUrl || null,
     config_url: settings.configUrl || null,

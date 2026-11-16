@@ -47,6 +47,7 @@ const urlParams = new URLSearchParams(location.search);
 const startup = {
   type: "startup",
   ref: urlParams.get("ref"),
+  sqlite: urlParams.get("sqlite"),
   sqliteUrls: urlParams.getAll("url").map(fixUrl),
   memory: !!urlParams.get("memory"),
   metadataUrl: fixUrl(urlParams.get("metadata")),
