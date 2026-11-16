@@ -257,6 +257,28 @@ def test_iframe_fragment_is_kept_in_hash(page, static_server):
     wait_for_hash(page, r"^/data/items\?_size=2$")
 
 
+@pytest.mark.parametrize(
+    "encoded,expected_path,expected_rows",
+    (
+        # Opened from another app on iOS: the second # arrives as %23
+        ("/data/items%23map=0/4.2/180&color=name", "/data/items#map=0/4.2/180&color=name", 3),
+        # ... and any % that was already in the URL arrives as %25
+        (
+            "/data/items?name__contains=Spr%256Fcket%23map=0/4.2/180",
+            "/data/items?name__contains=Spr%6Fcket#map=0/4.2/180",
+            1,
+        ),
+        # A %23 in a query string value is left alone
+        ("/data/items?name__contains=%23", "/data/items?name__contains=%23", 0),
+    ),
+)
+def test_percent_encoded_iframe_fragment(page, static_server, encoded, expected_path, expected_rows):
+    frame = boot(page, static_server + "/?csv=" + F + "items.csv#" + encoded)
+    expect(frame.locator("h1")).to_contain_text("items")
+    expect(frame.locator("tbody tr")).to_have_count(expected_rows)
+    assert app_path(page) == expected_path
+
+
 def test_get_form_submission(page, static_server):
     "The table filter form is a GET form"
     frame = boot(page, static_server + "/?csv=" + F + "items.csv#/data/items")

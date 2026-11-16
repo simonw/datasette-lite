@@ -310,11 +310,35 @@ async function registerServiceWorker() {
 
 // --- Routing between the #fragment and the iframe ----------------------------
 
+// A URL has one #fragment, and the shell's own fragment can hold a second #
+// in front of the page's fragment. Apple's URL parser - used when a link is
+// opened from another app on iOS or macOS - percent-encodes that second # as
+// %23, along with every % that was already there (%20 becomes %2520).
+// Returns the path with that undone, or null if it was not done to this path.
+function undoEncodedFragment(path) {
+  const at = path.lastIndexOf("%23");
+  if (path.includes("#") || at === -1) {
+    return null;
+  }
+  const query = path.indexOf("?");
+  if (query !== -1 && query < at) {
+    // In a query string %23 can also be a # inside a value, ?q=%23tag. Only
+    // take it as the start of a fragment if key=value follows it, as it does
+    // for MapLibre's #map=... and datasette-vega's #g.mark=...
+    if (!/^[^&=]+=/.test(path.slice(at + 3))) {
+      return null;
+    }
+  }
+  const decode = (part) => part.replace(/%25/g, "%");
+  return decode(path.slice(0, at)) + "#" + decode(path.slice(at + 3));
+}
+
 function pathFromHash() {
   let path = location.hash.replace(/^#/, "");
   if (!path) {
     return "/";
   }
+  path = undoEncodedFragment(path) || path;
   if (!path.startsWith("/")) {
     path = "/" + path;
   }
