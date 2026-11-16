@@ -241,6 +241,11 @@ def test_iframe_fragment_is_kept_in_hash(page, static_server):
     # A fragment change inside the page is mirrored in the address bar
     datasette_frame(page).evaluate("window.notReloaded = true; location.hash = 'g.mark=line'")
     wait_for_hash(page, r"^/data/items\?_size=1#g\.mark=line$")
+    # So is one made with the History API, which does not fire "hashchange"
+    datasette_frame(page).evaluate("history.replaceState(null, '', '#map=3/48/10&color=name')")
+    wait_for_hash(page, r"^/data/items\?_size=1#map=3/48/10&color=name$")
+    datasette_frame(page).evaluate("history.pushState(null, '', '#g.mark=area')")
+    wait_for_hash(page, r"^/data/items\?_size=1#g\.mark=area$")
     # Editing just the fragment in the address bar updates the page without reloading it
     page.evaluate("location.hash = '#/data/items?_size=1#g.mark=circle'")
     page.wait_for_function(

@@ -411,6 +411,18 @@ frame.addEventListener("load", () => {
   // A #fragment change within the page doesn't fire "load". This is a new
   // window object for every page load, so the listener is never doubled up.
   frame.contentWindow.addEventListener("hashchange", mirrorFrameInHash);
+  // Neither does history.replaceState() or pushState(), and those don't fire
+  // "hashchange" either. datasette-maplibre and MapLibre itself keep their
+  // state in the #fragment that way, so wrap both to mirror the new URL.
+  const frameHistory = frame.contentWindow.history;
+  for (const method of ["replaceState", "pushState"]) {
+    const original = frameHistory[method];
+    frameHistory[method] = function (...args) {
+      const result = original.apply(this, args);
+      mirrorFrameInHash();
+      return result;
+    };
+  }
   document.title = (doc && doc.title) || "Datasette";
   if (doc && doc.contentType == "text/html" && doc.body) {
     enhanceDocument(doc);
