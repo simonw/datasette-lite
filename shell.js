@@ -458,6 +458,60 @@ frame.addEventListener("load", () => {
   firstLoad = false;
 });
 
+// --- Downloads -----------------------------------------------------------------
+
+// Browsers do not ask the service worker for the target of an <a download>
+// link: the download is requested straight from the network, where app URLs
+// do not exist, so what gets saved is the host's 404 page (seen in Chromium
+// and in Safari). Datasette 1.0's export dialog downloads through such links.
+// fetch() does go through the service worker, so the shell fetches the file
+// and saves it from a blob: URL instead. A download started any other way - a
+// link or form to a response with Content-Disposition: attachment - is a
+// navigation, which the service worker does get.
+
+// The file name a response asks to be saved as, if it says
+function contentDispositionFilename(response) {
+  const header = response.headers.get("content-disposition") || "";
+  const encoded = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1].trim());
+    } catch (e) {
+      // Fall through to the plain filename
+    }
+  }
+  const plain = /filename\s*=\s*(?:"([^"]*)"|([^;]+))/i.exec(header);
+  return plain ? (plain[1] || plain[2] || "").trim() : "";
+}
+
+// Save an app URL as a file. name is the link's download attribute, which
+// can be empty: the name then comes from the response, or else from the URL.
+async function downloadWithFetch(href, name) {
+  let blob, filename;
+  try {
+    const response = await fetch(href);
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status + " " + (await response.text()).slice(0, 200));
+    }
+    filename =
+      name || contentDispositionFilename(response) ||
+      decodeURIComponent(new URL(href).pathname.split("/").pop()) || "download";
+    blob = await response.blob();
+  } catch (error) {
+    window.alert("Download failed: " + ((error && error.message) || error));
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.hidden = true;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Not straight away: the download reads the blob after the click returns
+  setTimeout(() => URL.revokeObjectURL(link.href), 60 * 1000);
+}
+
 // Called for every HTML page Datasette renders in the iframe
 function enhanceDocument(doc) {
   // Open external links in a new window, and make links to other Datasette
@@ -470,10 +524,6 @@ function enhanceDocument(doc) {
     if (!link) {
       return;
     }
-    const target = (link.getAttribute("target") || "").toLowerCase();
-    if (target && target !== "_self") {
-      return;
-    }
     let url;
     try {
       url = new URL(link.href);
@@ -481,6 +531,19 @@ function enhanceDocument(doc) {
       return;
     }
     if (!/^https?:$/.test(url.protocol)) {
+      return;
+    }
+    if (
+      link.hasAttribute("download") &&
+      url.origin === location.origin && isAppPath(url.pathname)
+    ) {
+      // The browser would not ask the service worker for this - see Downloads
+      ev.preventDefault();
+      downloadWithFetch(url.href, link.getAttribute("download"));
+      return;
+    }
+    const target = (link.getAttribute("target") || "").toLowerCase();
+    if (target && target !== "_self") {
       return;
     }
     if (url.origin !== location.origin) {
