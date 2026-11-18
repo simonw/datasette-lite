@@ -1146,6 +1146,32 @@ if settings["config_url"]:
 from datasette.app import Datasette
 import inspect
 
+def config_from_pairs(pairs, config=None):
+    """?s.key=value, the equivalent of datasette -s key value, using
+    Datasette's own code for it: a bare setting name such as template_debug
+    means settings.template_debug, any other key is a path into the
+    configuration, and values that parse as JSON are treated as JSON. The
+    pairs are merged into config, as they are on top of a -c file."""
+    try:
+        import click
+        from datasette.cli import Setting
+        from datasette.utils import pairs_to_nested_config, deep_dict_update
+    except ImportError:
+        raise ValueError(
+            "?s.{}= requires Datasette 1.0a8 or later - try removing &ref=".format(pairs[0][0])
+        )
+    converted = []
+    for key, value in pairs:
+        try:
+            converted.append(Setting().convert((key, value), None, None))
+        except click.ClickException as ex:
+            raise ValueError("?s.{}={}: {}".format(key, value, ex.format_message()))
+    return deep_dict_update(config or {}, pairs_to_nested_config(converted))
+
+
+if settings["config_pairs"]:
+    config = config_from_pairs(settings["config_pairs"], config)
+
 datasette_kwargs = {}
 if config is not None:
     if "config" not in inspect.signature(Datasette.__init__).parameters:
@@ -1341,6 +1367,7 @@ async function startDatasette(settings) {
     install_urls: (settings.installUrls || []).filter(Boolean),
     metadata_url: settings.metadataUrl || null,
     config_url: settings.configUrl || null,
+    config_pairs: settings.configPairs || [],
     memory: !!settings.memory,
     root: !!settings.root,
     base_url: settings.baseUrl,

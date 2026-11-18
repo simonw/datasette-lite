@@ -57,6 +57,9 @@ const startup = {
   jsonUrls: urlParams.getAll("json").map(fixUrl),
   parquetUrls: urlParams.getAll("parquet").map(fixUrl),
   installUrls: urlParams.getAll("install"),
+  // ?s.key=value, any number of times: the same as datasette -s key value
+  configPairs: [...urlParams].filter(([key]) => key.startsWith("s.") && key.length > 2)
+    .map(([key, value]) => [key.slice(2), value]),
   root: !!urlParams.get("root"),
   baseUrl: APP_BASE,
 };
