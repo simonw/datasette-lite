@@ -190,6 +190,51 @@ def test_config(page, static_server):
     assert settings["base_url"] == base + "/"
 
 
+def test_s_template_debug(page, static_server):
+    # ?s.template_debug=1 is datasette -s template_debug 1
+    boot(page, static_server + "/?memory=1&s.template_debug=1")
+    base = iframe_base(page)
+    assert table_json(page, base + "/-/settings.json")["template_debug"] is True
+    # ?_context=1 only shows the template context when template_debug is on
+    html = datasette_frame(page).evaluate(
+        "async path => (await fetch(path)).text()", base + "/?_context=1"
+    )
+    assert html.startswith("<pre>{")
+    assert "datasette_version" in html
+
+
+def test_s_multiple_nested_and_over_config(page, static_server):
+    boot(
+        page,
+        static_server
+        + "/?config={F}config.yml&csv={F}items.csv".format(F=F)
+        + "&s.settings.default_page_size=3&s.max_returned_rows=7"
+        + "&s.plugins.demo.options=" + quote('{"a": [1, 2]}')
+        + "&s.base_url=/should-be-ignored/",
+    )
+    base = iframe_base(page)
+    settings = table_json(page, base + "/-/settings.json")
+    # Wins over the 2 in config.yml
+    assert settings["default_page_size"] == 3
+    assert settings["max_returned_rows"] == 7
+    assert settings["base_url"] == base + "/"
+    config = table_json(page, base + "/-/config.json")
+    assert config["plugins"] == {"demo": {"options": {"a": [1, 2]}}}
+
+
+def test_s_invalid_value_is_reported(page, static_server):
+    page.goto(static_server + "/?memory=1&s.default_page_size=lots")
+    page.wait_for_function("document.getElementById('output').textContent.length", timeout=180 * 1000)
+    expect(page.locator("#output")).to_contain_text("?s.default_page_size=lots")
+    expect(page.locator("#output")).to_contain_text("should be an integer")
+
+
+def test_s_requires_1_0(page, static_server):
+    page.goto(static_server + "/?ref=stable&memory=1&s.template_debug=1")
+    page.wait_for_function("document.getElementById('output').textContent.length", timeout=180 * 1000)
+    expect(page.locator("#output")).to_contain_text("?s.template_debug= requires Datasette 1.0a8")
+
+
 def test_hash_with_query_string(page, static_server):
     frame = boot(page, static_server + "/?memory=1#/_memory?sql=" + quote("select 'hello' as greeting"))
     expect(frame.locator("td.col-greeting")).to_have_text("hello")
