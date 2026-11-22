@@ -154,6 +154,7 @@ function isVersionNumber(ref) {
   return /^\d+(\.\d+)*((a|b|rc)\d+)?(\.?(post|dev)\d+)*$/.test(ref);
 }
 
+// JS-BEGIN install
 // Is this ?ref= something GitHub could have a branch, tag or commit for?
 // Mirrors what the zip proxy accepts.
 function isGitRef(ref) {
@@ -161,32 +162,59 @@ function isGitRef(ref) {
     ref.split("/").every(part => part !== "" && !part.startsWith("."));
 }
 
-// JS-BEGIN install
 // ?install=simonw/datasette-cluster-map and
 // ?install=https://github.com/simonw/datasette-cluster-map both name a GitHub
 // repository, to run a plugin from the source in it rather than from a
-// release on PyPI. Returns "owner/repo" for those and null for anything else:
-// a package name, a requirement such as datasette-leaflet>=0.3 or the URL of
-// a wheel. None of those can be mistaken for a repository - a package name
-// has no / in it.
-function githubRepo(install) {
-  const match = /^(?:https?:\/\/(?:www\.)?github\.com\/)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/.exec(install);
+// release on PyPI. Either can end in @ref for a branch, tag or commit other
+// than the default branch, and the URLs of GitHub's own pages for those -
+// /tree/<branch or tag>, /commit/<sha>, /pull/<number> - work too.
+//
+// Returns {repo: "owner/repo", ref} - ref is null for the default branch -
+// or null for anything else: a package name, a requirement such as
+// datasette-leaflet>=0.3 or the URL of a wheel. None of those can be
+// mistaken for a repository - a package name has no / in it.
+function githubSource(install) {
+  const match = /^(https?:\/\/(?:www\.)?github\.com\/)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/([A-Za-z0-9._-]+?)(?:\.git)?(\/|@.+|\/(?:tree|commit|pull)\/.+)?$/.exec(install);
   if (!match) {
     return null;
   }
-  const [, owner, repo] = match;
+  const [, isUrl, owner, repo, rest] = match;
   // dist/plugin.whl is a wheel, and . and .. are not repositories
   if (/^\.+$/.test(repo) || repo.endsWith(".whl")) {
     return null;
   }
-  return `${owner}/${repo}`;
+  let ref = null;
+  if (rest && rest !== "/") {
+    if (rest.startsWith("@")) {
+      ref = rest.slice(1);
+    } else if (!isUrl) {
+      return null;
+    } else {
+      const [, page, value] = /^\/(tree|commit|pull)\/(.+?)\/?$/.exec(rest);
+      if (page == "pull") {
+        // The pull request itself, not its /files or /commits tab. GitHub
+        // keeps a ref for each one, which works for those from forks too.
+        if (!/^\d+$/.test(value)) {
+          return null;
+        }
+        ref = `refs/pull/${value}/head`;
+      } else {
+        // All of it: a branch can have a / in its name
+        ref = value;
+      }
+    }
+    if (!isGitRef(ref)) {
+      return null;
+    }
+  }
+  return {repo: `${owner}/${repo}`, ref};
 }
 
-// Any other github.com URL that is not a wheel - a branch, a pull request, a
-// file - is a mistake, and micropip's error for it would not say why
+// Any other github.com URL that is not a wheel - an issue, a file, a list of
+// releases - is a mistake, and micropip's error for it would not say why
 function isOtherGithubUrl(install) {
   return /^https?:\/\/(www\.)?github\.com(\/|$)/.test(install) &&
-    !githubRepo(install) && !/\.whl([?#]|$)/.test(install);
+    !githubSource(install) && !/\.whl([?#]|$)/.test(install);
 }
 // JS-END install
 
@@ -1043,13 +1071,20 @@ for install in settings["installs"]:
         with step("Installing " + install["requirement"]):
             await install_resolving_conflicts(install["requirement"], pre=settings["pre"])
         continue
-    # ?install=owner/repo, or the URL of a GitHub repository: run the plugin
-    # from the source on its default branch
+    # ?install=owner/repo, owner/repo@ref or a GitHub URL: run the plugin
+    # from the source in that repository
     with step("Installing " + install["repo"]) as plugin_step:
         try:
             plugin_zip = await fetch_bytes(install["source_url"])
         except ValueError as ex:
             if "HTTP 404" in str(ex):
+                if install["ref"]:
+                    raise ValueError(
+                        "?install={} could not be used: {} is not a branch, tag or commit in "
+                        "a public {} repository on GitHub".format(
+                            install["requirement"], install["ref"], install["repo"].split("@")[0]
+                        )
+                    )
                 raise ValueError("?install={} could not be used: there is no public {} repository on GitHub".format(
                     install["requirement"], install["repo"]
                 ))
@@ -1057,7 +1092,7 @@ for install in settings["installs"]:
                 raise ValueError(
                     "?install={} could not be used: the proxy that Datasette Lite downloads "
                     "GitHub repositories through does not serve {}".format(
-                        install["requirement"], install["repo"]
+                        install["requirement"], install["repo"].split("@")[0]
                     )
                 )
             raise
@@ -1445,15 +1480,18 @@ async function startDatasette(settings) {
     if (isOtherGithubUrl(requirement)) {
       throw new Error(
         `?install=${requirement} is not the URL of a GitHub repository or of a wheel. ` +
-        `To install a plugin from its repository use ?install=owner/repo or ` +
-        `?install=https://github.com/owner/repo`
+        `To install a plugin from its repository use ?install=owner/repo, ` +
+        `?install=owner/repo@ref or the URL of the repository, or of a branch, ` +
+        `tag, commit or pull request in it`
       );
     }
-    const repo = githubRepo(requirement);
+    const source = githubSource(requirement);
     return {
       requirement,
-      repo,
-      source_url: repo ? `${GITHUB_ZIP_PROXY}/${repo}/HEAD` : null,
+      // What the loading screen calls it: owner/repo or owner/repo@ref
+      repo: source && source.repo + (source.ref ? "@" + source.ref : ""),
+      ref: source && source.ref,
+      source_url: source ? `${GITHUB_ZIP_PROXY}/${source.repo}/${source.ref || "HEAD"}` : null,
     };
   });
   const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);

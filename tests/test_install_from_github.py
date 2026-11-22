@@ -1,6 +1,6 @@
-"""Tests for ?install=owner/repo and ?install=https://github.com/owner/repo,
-which run a plugin from a zip of the source in its GitHub repository rather
-than from a release on PyPI.
+"""Tests for ?install=owner/repo, ?install=owner/repo@ref and the github.com
+URLs that mean the same, which run a plugin from a zip of the source in its
+GitHub repository rather than from a release on PyPI.
 
 The JavaScript that recognises a repository and the Python that unpacks the
 zip are both extracted from webworker.js, so the code tested here is exactly
@@ -66,50 +66,94 @@ def js(page, static_server):
     )
 
 
+REPO = "simonw/datasette-cluster-map"
+URL = "https://github.com/" + REPO
+SHA7 = SHA[:7]
+
+
 @pytest.mark.parametrize(
-    "install,expected",
+    "install,repo,ref",
     (
-        ("simonw/datasette-cluster-map", "simonw/datasette-cluster-map"),
-        ("https://github.com/simonw/datasette-cluster-map", "simonw/datasette-cluster-map"),
-        ("https://github.com/simonw/datasette-cluster-map/", "simonw/datasette-cluster-map"),
-        ("https://github.com/simonw/datasette-cluster-map.git", "simonw/datasette-cluster-map"),
-        ("http://www.github.com/simonw/datasette-cluster-map", "simonw/datasette-cluster-map"),
-        ("some-org/repo.with_dots", "some-org/repo.with_dots"),
-        # What micropip gets: package names, requirements and wheels
-        ("datasette-cluster-map", None),
-        ("datasette-cluster-map==0.18", None),
-        ("datasette-leaflet>=0.3", None),
-        ("https://example.com/simonw/datasette-cluster-map", None),
-        ("https://example.com/dist/plugin-0.1-py3-none-any.whl", None),
-        ("https://github.com/simonw/plugin/releases/download/0.1/plugin-0.1-py3-none-any.whl", None),
-        ("dist/plugin-0.1-py3-none-any.whl", None),
-        # Not a repository
-        ("https://github.com/simonw", None),
-        ("https://github.com/simonw/datasette-cluster-map/tree/main", None),
-        ("https://github.com/simonw/datasette-cluster-map/pull/1", None),
-        ("simonw/datasette-cluster-map/main", None),
-        ("simonw/..", None),
-        ("-simonw/repo", None),
-        ("simonw/repo name", None),
-        ("simonw/repo\n", None),
-        ("", None),
+        # The default branch
+        (REPO, REPO, None),
+        (URL, REPO, None),
+        (URL + "/", REPO, None),
+        (URL + ".git", REPO, None),
+        ("http://www.github.com/" + REPO, REPO, None),
+        ("some-org/repo.with_dots", "some-org/repo.with_dots", None),
+        # A branch, tag or commit
+        (REPO + "@main", REPO, "main"),
+        (REPO + "@0.18", REPO, "0.18"),
+        (REPO + "@" + SHA, REPO, SHA),
+        (REPO + "@" + SHA7, REPO, SHA7),
+        (REPO + "@feature/with-slash", REPO, "feature/with-slash"),
+        (URL + "@main", REPO, "main"),
+        (URL + ".git@v1.0", REPO, "v1.0"),
+        # The pages GitHub has for them
+        (URL + "/tree/main", REPO, "main"),
+        (URL + "/tree/main/", REPO, "main"),
+        (URL + "/tree/0.18", REPO, "0.18"),
+        (URL + "/tree/feature/with-slash", REPO, "feature/with-slash"),
+        (URL + "/commit/" + SHA, REPO, SHA),
+        (URL + "/pull/12", REPO, "refs/pull/12/head"),
+        (URL + "/pull/12/", REPO, "refs/pull/12/head"),
     ),
 )
-def test_github_repo(js, install, expected):
-    assert js("githubRepo", install) == expected
+def test_github_source(js, install, repo, ref):
+    assert js("githubSource", install) == {"repo": repo, "ref": ref}
+
+
+@pytest.mark.parametrize(
+    "install",
+    (
+        # What micropip gets: package names, requirements and wheels
+        "datasette-cluster-map",
+        "datasette-cluster-map==0.18",
+        "datasette-leaflet>=0.3",
+        "datasette-leaflet @ https://example.com/dist/plugin-0.1-py3-none-any.whl",
+        "https://example.com/" + REPO,
+        "https://example.com/dist/plugin-0.1-py3-none-any.whl",
+        "https://github.com/simonw/plugin/releases/download/0.1/plugin-0.1-py3-none-any.whl",
+        "dist/plugin-0.1-py3-none-any.whl",
+        # Not a repository, or not a ref in one
+        "https://github.com/simonw",
+        URL + "/issues/1",
+        URL + "/blob/main/README.md",
+        URL + "/pull/12/files",
+        URL + "/pull/new",
+        URL + "/tree/",
+        URL + "/tree/not a ref",
+        REPO + "/main",
+        REPO + "/tree/main",
+        REPO + "@",
+        REPO + "@not a ref",
+        REPO + "@../evil",
+        REPO + "@.hidden",
+        "simonw/..",
+        "-simonw/repo",
+        "simonw/repo name",
+        "simonw/repo\n",
+        "",
+    ),
+)
+def test_not_a_github_source(js, install):
+    assert js("githubSource", install) is None
 
 
 @pytest.mark.parametrize(
     "install,expected",
     (
-        ("https://github.com/simonw/datasette-cluster-map/tree/main", True),
-        ("https://github.com/simonw/datasette-cluster-map/pull/1", True),
+        (URL + "/issues/1", True),
+        (URL + "/blob/main/README.md", True),
+        (URL + "/pull/12/files", True),
         ("https://github.com/simonw", True),
         ("https://github.com/", True),
-        ("https://github.com/simonw/datasette-cluster-map", False),
+        (URL, False),
+        (URL + "/tree/main", False),
+        (URL + "/pull/12", False),
         ("https://github.com/simonw/plugin/releases/download/0.1/plugin-0.1-py3-none-any.whl", False),
         ("https://github.community/thing", False),
-        ("simonw/datasette-cluster-map", False),
+        (REPO, False),
         ("datasette-cluster-map", False),
     ),
 )
@@ -247,13 +291,16 @@ def startup_error(page, url):
 
 
 @pytest.mark.parametrize(
-    "install",
+    "install,ref",
     (
-        "simonw/datasette-lite-test-stream",
-        "https://github.com/simonw/datasette-lite-test-stream",
+        # The default branch of the repository
+        ("simonw/datasette-lite-test-stream", "HEAD"),
+        ("https://github.com/simonw/datasette-lite-test-stream", "HEAD"),
+        ("simonw/datasette-lite-test-stream@some-branch", "some-branch"),
+        ("https://github.com/simonw/datasette-lite-test-stream/pull/12", "refs/pull/12/head"),
     ),
 )
-def test_install_from_repository(page, static_server, install):
+def test_install_from_repository(page, static_server, install, ref):
     requested = []
 
     def handle(route):
@@ -262,8 +309,7 @@ def test_install_from_repository(page, static_server, install):
 
     page.route(PROXY + "/**", handle)
     boot(page, static_server + "/?memory=1&install=" + install)
-    # The default branch of the repository
-    assert requested == [PROXY + "/simonw/datasette-lite-test-stream/HEAD"]
+    assert requested == [PROXY + "/simonw/datasette-lite-test-stream/" + ref]
     plugins = datasette_frame(page).evaluate(
         """async () => {
             const base = location.pathname.match(/^.*?\\/app\\/[^/]+/)[0];
@@ -283,44 +329,54 @@ def test_install_from_repository(page, static_server, install):
     assert state["started"] == 0
 
 
-def test_loading_screen_names_the_plugin_and_commit(page, static_server):
+@pytest.mark.parametrize("ref", ("", "@0.2"))
+def test_loading_screen_names_the_plugin_and_commit(page, static_server, ref):
     page.route(
         PROXY + "/**",
         lambda route: route.fulfill(body=plugin_zip(), content_type="application/zip", headers=CORS),
     )
     messages = []
     page.on("console", lambda message: messages.append(message.text))
-    boot(page, static_server + "/?memory=1&install=simonw/datasette-lite-test-stream")
-    assert page.evaluate(
-        """() => [...document.querySelectorAll('*')].some(el => el.children.length === 0 &&
-            el.textContent.includes(
-                'Installing datasette-lite-test-stream 0.2 from simonw/datasette-lite-test-stream (commit dfeec63)'
-            ))"""
-    ), messages
+    boot(page, static_server + "/?memory=1&install=simonw/datasette-lite-test-stream" + ref)
+    labels = page.evaluate(
+        "() => [...document.querySelectorAll('.step-label')].map(el => el.textContent)"
+    )
+    assert (
+        "Installing datasette-lite-test-stream 0.2 from "
+        "simonw/datasette-lite-test-stream{} (commit dfeec63)".format(ref)
+    ) in labels, messages
 
 
 @pytest.mark.parametrize(
-    "status,message",
+    "install,status,message",
     (
         (
+            "simonw/no-such-plugin",
             404,
             "?install=simonw/no-such-plugin could not be used: there is no public "
             "simonw/no-such-plugin repository on GitHub",
         ),
         (
+            "simonw/plugin@no-such-branch",
+            404,
+            "?install=simonw/plugin@no-such-branch could not be used: no-such-branch is not "
+            "a branch, tag or commit in a public simonw/plugin repository on GitHub",
+        ),
+        (
+            "someone-else/plugin@main",
             403,
-            "?install=simonw/no-such-plugin could not be used: the proxy that Datasette Lite "
-            "downloads GitHub repositories through does not serve simonw/no-such-plugin",
+            "?install=someone-else/plugin@main could not be used: the proxy that Datasette "
+            "Lite downloads GitHub repositories through does not serve someone-else/plugin",
         ),
     ),
 )
-def test_repository_that_cannot_be_downloaded(page, static_server, status, message):
+def test_repository_that_cannot_be_downloaded(page, static_server, install, status, message):
     page.route(
         PROXY + "/**", lambda route: route.fulfill(status=status, body="No", headers=CORS)
     )
-    expect(
-        startup_error(page, static_server + "/?memory=1&install=simonw/no-such-plugin")
-    ).to_contain_text(message)
+    expect(startup_error(page, static_server + "/?memory=1&install=" + install)).to_contain_text(
+        message
+    )
 
 
 def test_repository_without_a_pyproject(page, static_server):
@@ -341,17 +397,29 @@ def test_repository_without_a_pyproject(page, static_server):
 
 
 def test_other_github_urls_are_an_error(page, static_server):
-    url = "https://github.com/simonw/datasette-cluster-map/tree/main"
+    url = "https://github.com/simonw/datasette-cluster-map/issues/1"
     expect(startup_error(page, static_server + "/?memory=1&install=" + url)).to_contain_text(
         "?install=" + url + " is not the URL of a GitHub repository or of a wheel"
     )
 
 
 @pytest.mark.network
-def test_install_real_repository(page, static_server):
+@pytest.mark.parametrize(
+    "install,version",
+    (
+        ("simonw/datasette-packages", None),
+        # A tag
+        ("simonw/datasette-packages@0.3", "0.3"),
+        ("https://github.com/simonw/datasette-packages/tree/0.3", "0.3"),
+    ),
+)
+def test_install_real_repository(page, static_server, install, version):
     frame = boot(
         page,
-        static_server + "/?memory=1&install=simonw/datasette-packages#/-/packages.json",
+        static_server + "/?memory=1&install=" + install + "#/-/packages.json",
         wait_for="pre",
     )
-    assert "datasette-packages" in json.loads(frame.locator("pre").text_content())
+    packages = json.loads(frame.locator("pre").text_content())
+    assert "datasette-packages" in packages
+    if version:
+        assert packages["datasette-packages"] == version
