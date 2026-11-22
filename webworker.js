@@ -21,8 +21,9 @@ const SQLITE_WHEELS_URL = "https://datasette.github.io/pysqlite3-wasm-wheels/";
 const PYODIDE_PYTHON_TAG = "cp314";
 const PYODIDE_PLATFORM_TAG = "pyemscripten_2026_0_wasm32";
 // ?ref=main (or any other branch, tag or commit) runs Datasette from a zip of
-// its source on GitHub. GitHub does not serve those zips with CORS headers,
-// so they are fetched through this proxy, which adds them:
+// its source on GitHub, and ?install=owner/repo does the same for a plugin.
+// GitHub does not serve those zips with CORS headers, so they are fetched
+// through this proxy, which adds them:
 // https://<proxy>/<owner>/<repo>/<ref>
 const GITHUB_ZIP_PROXY = "https://github-zip-cors-proxy.simonw.workers.dev";
 const DATASETTE_REPO = "simonw/datasette";
@@ -159,6 +160,35 @@ function isGitRef(ref) {
   return /^[A-Za-z0-9._\/-]{1,200}$/.test(ref) &&
     ref.split("/").every(part => part !== "" && !part.startsWith("."));
 }
+
+// JS-BEGIN install
+// ?install=simonw/datasette-cluster-map and
+// ?install=https://github.com/simonw/datasette-cluster-map both name a GitHub
+// repository, to run a plugin from the source in it rather than from a
+// release on PyPI. Returns "owner/repo" for those and null for anything else:
+// a package name, a requirement such as datasette-leaflet>=0.3 or the URL of
+// a wheel. None of those can be mistaken for a repository - a package name
+// has no / in it.
+function githubRepo(install) {
+  const match = /^(?:https?:\/\/(?:www\.)?github\.com\/)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/.exec(install);
+  if (!match) {
+    return null;
+  }
+  const [, owner, repo] = match;
+  // dist/plugin.whl is a wheel, and . and .. are not repositories
+  if (/^\.+$/.test(repo) || repo.endsWith(".whl")) {
+    return null;
+  }
+  return `${owner}/${repo}`;
+}
+
+// Any other github.com URL that is not a wheel - a branch, a pull request, a
+// file - is a mistake, and micropip's error for it would not say why
+function isOtherGithubUrl(install) {
+  return /^https?:\/\/(www\.)?github\.com(\/|$)/.test(install) &&
+    !githubRepo(install) && !/\.whl([?#]|$)/.test(install);
+}
+// JS-END install
 
 // JS-BEGIN sqlite
 // Is this ?sqlite= a SQLite version number - 3.54.1, 3.54, 3.8.11.1?
@@ -765,19 +795,31 @@ def file_name(url):
     return url.split("?")[0].split("#")[0].rstrip("/").split("/")[-1] or url
 
 
-def install_datasette_source(zip_bytes, site_packages):
-    """Install Datasette from a zip of its GitHub repository, as served by
-    https://github.com/simonw/datasette/archive/<ref>.zip
+class SourceZipError(ValueError):
+    "A repository that cannot be installed straight from its source"
 
-    Datasette is pure Python with no build step, so this copies the datasette/
-    package out of the zip into site_packages and writes a .dist-info
-    directory next to it. That directory is what makes Datasette count as
-    installed: without it a plugin that requires "datasette" would have
-    micropip install a second copy from PyPI.
 
-    Returns (version, dependencies, commit). The dependencies are the
+def install_source_zip(zip_bytes, site_packages):
+    """Install a pure Python package from a zip of its GitHub repository, as
+    served by https://github.com/<owner>/<repo>/archive/<ref>.zip
+
+    Nothing is built: this copies the package (or single module) out of the
+    zip into site_packages and writes a .dist-info directory next to it.
+    That directory is what makes the package count as installed - it is
+    where Datasette finds a plugin's entry point, and without it anything
+    that requires the package would have micropip install a second copy
+    from PyPI.
+
+    The code is looked for where build backends look by default: a package
+    or module named after the project, at the top of the repository or in
+    src/. Failing that, any packages found in one of those two places.
+
+    Returns (name, version, dependencies, commit). The dependencies are the
     requirement strings from the zip's pyproject.toml, which the caller needs
-    to install. commit is the SHA GitHub records in the zip, or None."""
+    to install. commit is the SHA GitHub records in the zip, or None.
+
+    Raises SourceZipError, before anything is written, for a repository that
+    cannot be installed this way."""
     import io
     import pathlib
     import re
@@ -791,41 +833,86 @@ def install_datasette_source(zip_bytes, site_packages):
     if len(roots) != 1:
         raise ValueError("Not a GitHub source zip: expected one top level directory")
     root = roots.pop() + "/"
-    package = root + "datasette/"
-    if root + "pyproject.toml" not in names or package + "version.py" not in names:
-        raise ValueError(
-            "This version of Datasette cannot be run from source: it needs a "
-            "pyproject.toml and datasette/version.py. For an older release use "
-            "its version number, e.g. ?ref=0.64.2"
-        )
+    for name in names:
+        if any(part in ("", ".", "..") for part in name.split("/")):
+            raise ValueError("Unsafe path in zip: " + name)
+    files = set(names)
+    if root + "pyproject.toml" not in files:
+        raise SourceZipError("it has no pyproject.toml")
     project = tomllib.loads(archive.read(root + "pyproject.toml").decode("utf-8")).get("project") or {}
+    name = project.get("name")
+    if not name:
+        raise SourceZipError("its pyproject.toml has no [project] name")
     dependencies = list(project.get("dependencies") or [])
-    match = re.search(
-        r"""^__version__\s*=\s*["']([^"']+)["']""",
-        archive.read(package + "version.py").decode("utf-8"),
-        re.M,
-    )
-    if not match:
-        raise ValueError("Could not find __version__ in datasette/version.py")
-    version = match.group(1)
+
+    # Where is the code? (directory it is in, package directory or module file)
+    normalized = re.sub(r"[-_.]+", "_", name).lower()
+    found = []
+    bases = (root + "src/", root)
+    for base in bases:
+        if base + normalized + "/__init__.py" in files:
+            found = [(base, normalized + "/")]
+            break
+        if base + normalized + ".py" in files:
+            found = [(base, normalized + ".py")]
+            break
+    for base in bases:
+        if found:
+            break
+        # Not named after the project: any packages there are, other than
+        # the ones that are never the code itself
+        packages = set(
+            path[len(base):].split("/")[0]
+            for path in files
+            if path.startswith(base) and path[len(base):].count("/") == 1
+            and path.endswith("/__init__.py")
+        ) - {"tests", "test", "docs", "doc", "examples", "example", "scripts", "tools", "benchmarks"}
+        found = [(base, package + "/") for package in sorted(packages)]
+    if not found:
+        raise SourceZipError(
+            "could not find its Python code - looked for {0}/__init__.py and "
+            "{0}.py, at the top of the repository and in src/".format(normalized)
+        )
+
+    version = project.get("version")
+    if not version:
+        # A dynamic version: look for __version__ = "..." in the code
+        for base, code in found:
+            candidates = [code] if code.endswith(".py") else [
+                code + "version.py", code + "__version__.py", code + "__about__.py", code + "__init__.py"
+            ]
+            for candidate in candidates:
+                if base + candidate in files:
+                    match = re.search(
+                        r"""^__version__\s*=\s*["']([^"']+)["']""",
+                        archive.read(base + candidate).decode("utf-8"),
+                        re.M,
+                    )
+                    if match:
+                        version = match.group(1)
+                        break
+            if version:
+                break
+    if not version:
+        raise SourceZipError(
+            "could not find its version number - it needs a version in "
+            "pyproject.toml, or a __version__ in the package"
+        )
     # GitHub stores the commit the zip was made from as the zip's comment
     comment = archive.comment.decode("ascii", "replace").strip()
     commit = comment if re.fullmatch(r"[0-9a-f]{40}", comment) else None
 
     site_packages = pathlib.Path(site_packages)
-    for name in names:
-        if not name.startswith(package):
-            continue
-        parts = name[len(root):].split("/")
-        if any(part in ("", ".", "..") for part in parts):
-            raise ValueError("Unsafe path in zip: " + name)
-        target = site_packages.joinpath(*parts)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(archive.read(name))
+    for base, code in found:
+        for path in names:
+            if path.startswith(base + code):
+                target = site_packages.joinpath(*path[len(base):].split("/"))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(archive.read(path))
 
-    dist_info = site_packages / "datasette-{}.dist-info".format(version)
+    dist_info = site_packages / "{}-{}.dist-info".format(normalized, version)
     dist_info.mkdir(parents=True, exist_ok=True)
-    metadata = ["Metadata-Version: 2.1", "Name: datasette", "Version: " + version]
+    metadata = ["Metadata-Version: 2.1", "Name: " + name, "Version: " + version]
     metadata.extend("Requires-Dist: " + dependency for dependency in dependencies)
     (dist_info / "METADATA").write_text("\n".join(metadata) + "\n")
     (dist_info / "INSTALLER").write_text("datasette-lite\n")
@@ -838,7 +925,19 @@ def install_datasette_source(zip_bytes, site_packages):
             lines.extend("{} = {}".format(key, value) for key, value in entries.items())
             lines.append("")
     (dist_info / "entry_points.txt").write_text("\n".join(lines))
-    return version, dependencies, commit
+    return name, version, dependencies, commit
+
+
+def install_datasette_source(zip_bytes, site_packages):
+    """Install Datasette from a zip of its GitHub repository, for ?ref=.
+    Returns (version, dependencies, commit) - see install_source_zip()."""
+    try:
+        return install_source_zip(zip_bytes, site_packages)[1:]
+    except SourceZipError as ex:
+        raise ValueError(
+            "This version of Datasette cannot be run from source: {}. For an "
+            "older release use its version number, e.g. ?ref=0.64.2".format(ex)
+        )
 
 
 def use_pysqlite3_as_sqlite3():
@@ -859,6 +958,7 @@ def use_pysqlite3_as_sqlite3():
 
 import micropip
 import importlib, importlib.metadata
+import site
 if settings["sqlite_wheel_url"]:
     # ?sqlite= - before Datasette is installed, and before anything has
     # imported sqlite3
@@ -885,7 +985,6 @@ with step("Installing Datasette") as install_step:
     ])
     if settings["datasette_source_url"]:
         # ?ref= named a branch, tag or commit: run Datasette from its source
-        import site
         try:
             source_zip = await fetch_bytes(settings["datasette_source_url"])
         except ValueError as ex:
@@ -939,9 +1038,45 @@ async def install_resolving_conflicts(requirement, attempts=5, pre=False):
 # Install any extra ?install= dependencies. When Datasette itself is a preview
 # release so are the plugins: plugin releases that support a Datasette alpha
 # are published as alphas too, and the stable ones often do not work with it.
-for install_url in settings["install_urls"]:
-    with step("Installing " + install_url):
-        await install_resolving_conflicts(install_url, pre=settings["pre"])
+for install in settings["installs"]:
+    if not install["source_url"]:
+        with step("Installing " + install["requirement"]):
+            await install_resolving_conflicts(install["requirement"], pre=settings["pre"])
+        continue
+    # ?install=owner/repo, or the URL of a GitHub repository: run the plugin
+    # from the source on its default branch
+    with step("Installing " + install["repo"]) as plugin_step:
+        try:
+            plugin_zip = await fetch_bytes(install["source_url"])
+        except ValueError as ex:
+            if "HTTP 404" in str(ex):
+                raise ValueError("?install={} could not be used: there is no public {} repository on GitHub".format(
+                    install["requirement"], install["repo"]
+                ))
+            if "HTTP 403" in str(ex):
+                raise ValueError(
+                    "?install={} could not be used: the proxy that Datasette Lite downloads "
+                    "GitHub repositories through does not serve {}".format(
+                        install["requirement"], install["repo"]
+                    )
+                )
+            raise
+        try:
+            plugin_name, plugin_version, plugin_dependencies, plugin_commit = install_source_zip(
+                plugin_zip, site.getsitepackages()[0]
+            )
+        except SourceZipError as ex:
+            raise ValueError("?install={} cannot be installed from its source: {}".format(
+                install["requirement"], ex
+            ))
+        del plugin_zip
+        importlib.invalidate_caches()
+        renameStep(plugin_step, "Installing {} {} from {}{}".format(
+            plugin_name, plugin_version, install["repo"],
+            " (commit {})".format(plugin_commit[:7]) if plugin_commit else ""
+        ))
+        if plugin_dependencies:
+            await install_resolving_conflicts(plugin_dependencies, pre=settings["pre"])
 
 
 async def install_missing_requirements():
@@ -987,7 +1122,7 @@ async def install_missing_requirements():
                     pass
 
 
-if settings["install_urls"]:
+if settings["installs"]:
     await install_missing_requirements()
 
 # The database files. These have been downloading since the worker started:
@@ -1303,6 +1438,24 @@ async function startDatasette(settings) {
       settings.sqlite, SQLITE_WHEELS_URL, PYODIDE_PYTHON_TAG, PYODIDE_PLATFORM_TAG
     );
   }
+  // ?install= is something for micropip to install - the name of a package
+  // on PyPI, usually - or a GitHub repository to run a plugin from the source
+  // of. HEAD is the repository's default branch.
+  const installs = (settings.installUrls || []).filter(Boolean).map(requirement => {
+    if (isOtherGithubUrl(requirement)) {
+      throw new Error(
+        `?install=${requirement} is not the URL of a GitHub repository or of a wheel. ` +
+        `To install a plugin from its repository use ?install=owner/repo or ` +
+        `?install=https://github.com/owner/repo`
+      );
+    }
+    const repo = githubRepo(requirement);
+    return {
+      requirement,
+      repo,
+      source_url: repo ? `${GITHUB_ZIP_PROXY}/${repo}/HEAD` : null,
+    };
+  });
   const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);
   if (sqliteUrls.length) {
     toLoad.push(...databaseFiles(sqliteUrls));
@@ -1331,6 +1484,7 @@ async function startDatasette(settings) {
   [
     ...toLoad.map(([name, url]) => url),
     datasetteSourceUrl,
+    ...installs.map(install => install.source_url),
     ...sources.flatMap(([sourceType, urls]) => urls),
     settings.metadataUrl,
     settings.configUrl,
@@ -1364,7 +1518,7 @@ async function startDatasette(settings) {
     pre,
     sqlite_version: sqliteWheelUrl ? settings.sqlite : null,
     sqlite_wheel_url: sqliteWheelUrl,
-    install_urls: (settings.installUrls || []).filter(Boolean),
+    installs,
     metadata_url: settings.metadataUrl || null,
     config_url: settings.configUrl || null,
     config_pairs: settings.configPairs || [],

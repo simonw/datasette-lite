@@ -38,16 +38,22 @@ datasette = "datasette._pytest_plugin"
 @pytest.fixture(scope="module")
 def install_datasette_source():
     # The startup Python has top level awaits, so it cannot be exec()ed whole
+    return source_zip_functions()["install_datasette_source"]
+
+
+def source_zip_functions():
+    "The functions in the startup Python that install from a source zip"
+    wanted = {"SourceZipError", "install_source_zip", "install_datasette_source"}
     tree = ast.parse(extract("startup"))
-    functions = [
+    nodes = [
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "install_datasette_source"
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted
     ]
-    assert len(functions) == 1
+    assert {node.name for node in nodes} == wanted
     namespace = {}
-    exec(compile(ast.Module(body=functions, type_ignores=[]), "webworker.js", "exec"), namespace)
-    return namespace["install_datasette_source"]
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "webworker.js", "exec"), namespace)
+    return namespace
 
 
 def source_zip(files=None, root="datasette-main", comment=SHA.encode()):

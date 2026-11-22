@@ -62,7 +62,7 @@ The loading screen shows the version number and commit that was loaded. `?instal
 
 This needs a commit that has a `pyproject.toml`, so it does not work for old releases - use their version number instead.
 
-GitHub does not serve its source zip files with CORS headers, so Datasette Lite downloads them through a small Cloudflare Worker that adds those headers. The proxy only serves repositories owned by `simonw`, and only to pages on `lite.datasette.io` and `localhost`. If you host your own copy of Datasette Lite on another domain you will need your own proxy: change `GITHUB_ZIP_PROXY` at the top of `webworker.js`.
+GitHub does not serve its source zip files with CORS headers, so Datasette Lite downloads them through a small Cloudflare Worker that adds those headers - for `?ref=`, and for [plugins installed from a GitHub repository](#plugins-from-a-github-repository). The proxy only serves repositories owned by `simonw`, and only to pages on `lite.datasette.io` and `localhost`. If you host your own copy of Datasette Lite on another domain you will need your own proxy: change `GITHUB_ZIP_PROXY` at the top of `webworker.js`.
 
 ## Load a different SQLite version
 
@@ -256,6 +256,23 @@ You can install plugins into Datasette Lite by adding one or more `?install=name
 Plugins that load their own JavaScript and CSS now work, as do plugins that accept POST requests - for example [datasette-cluster-map](https://datasette.io/plugins/datasette-cluster-map), [datasette-vega](https://datasette.io/plugins/datasette-vega), [datasette-write](https://datasette.io/plugins/datasette-write), [datasette-edit-schema](https://datasette.io/plugins/datasette-edit-schema), [datasette-upload-csvs](https://datasette.io/plugins/datasette-upload-csvs) and [datasette-auth-passwords](https://datasette.io/plugins/datasette-auth-passwords). Plugins need to be pure Python (or available as Pyodide packages) and must not require threads or subprocesses.
 
 Because Datasette Lite runs a preview release of Datasette by default, `?install=` also picks the most recent preview release of each plugin - that is where plugin authors publish support for the Datasette alphas. Some plugins do not work with the latest alpha yet. If one misbehaves, add `?ref=stable` to run it against the stable Datasette release, which installs the plugin's stable release too.
+
+### Plugins from a GitHub repository
+
+To try a plugin's unreleased code, give `?install=` its GitHub repository instead of its name on PyPI - either as `owner/repo` or as the URL of the repository:
+
+- https://lite.datasette.io/?install=simonw/datasette-cluster-map
+- https://lite.datasette.io/?install=https://github.com/simonw/datasette-cluster-map
+
+Both run the plugin from the source on the repository's default branch - usually `main`. The loading screen shows the version number and commit that was loaded. The plugin's dependencies are installed from PyPI as usual, and this can be combined with other `?install=` parameters and with `?ref=`.
+
+Nothing is built, so this works for plugins where the code in the repository is the code that runs:
+
+- The repository needs a `pyproject.toml` with a `[project]` table - a plugin that only has a `setup.py` cannot be installed this way.
+- The code needs to be a package or module named after the project - `datasette_cluster_map/` or `datasette_cluster_map.py` for `datasette-cluster-map` - at the top of the repository or in `src/`.
+- A plugin that compiles its JavaScript or CSS when it is packaged will be missing those files.
+
+The source is downloaded through the same proxy that `?ref=` uses, [described above](#unreleased-code-a-branch-tag-or-commit), so this only works for repositories owned by `simonw` unless you run your own proxy.
 
 Some plugins hardcode root-relative URLs such as `/-/password-tool` rather than respecting Datasette's `base_url` setting. Datasette Lite rewrites those in HTML attributes and routes requests for them back to the right tab, including links that a plugin's JavaScript adds to the page. One case is handled less smoothly in Firefox and Safari: when JavaScript navigates to such a URL (`location.href = "/-/..."`) from a table, row or query page, those browsers give the service worker no way to tell which tab the navigation came from. The request reaches the web server first, and Datasette Lite then loads the right page itself - so it works, but a form submitted that way loses its POST data.
 
