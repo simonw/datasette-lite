@@ -195,11 +195,13 @@ def test_s_template_debug(page, static_server):
     boot(page, static_server + "/?memory=1&s.template_debug=1")
     base = iframe_base(page)
     assert table_json(page, base + "/-/settings.json")["template_debug"] is True
-    # ?_context=1 only shows the template context when template_debug is on
+    # ?_context=1 only shows the template context when template_debug is on.
+    # Up to Datasette 1.0a43 that was the context as JSON in a <pre>; since
+    # 1.0a44 it is a page describing each variable.
     html = datasette_frame(page).evaluate(
         "async path => (await fetch(path)).text()", base + "/?_context=1"
     )
-    assert html.startswith("<pre>{")
+    assert html.startswith("<pre>{") or "template context</title>" in html
     assert "datasette_version" in html
 
 
@@ -210,7 +212,10 @@ def test_s_multiple_nested_and_over_config(page, static_server):
         + "/?config={F}config.yml&csv={F}items.csv".format(F=F)
         + "&s.settings.default_page_size=3&s.max_returned_rows=7"
         + "&s.plugins.demo.options=" + quote('{"a": [1, 2]}')
-        + "&s.base_url=/should-be-ignored/",
+        + "&s.base_url=/should-be-ignored/"
+        # /-/config.json needs the permissions-debug permission since
+        # Datasette 1.0a44, which the root actor has
+        + "&root=1",
     )
     base = iframe_base(page)
     settings = table_json(page, base + "/-/settings.json")
