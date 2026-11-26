@@ -838,10 +838,6 @@ const MANAGE_PLUGINS_CSS = `
   color: #2e7d4f;
   font-weight: 700;
 }
-#manage-plugins-dialog .footer-info {
-  font-family: inherit;
-  font-size: 0.75rem;
-}
 @keyframes mp-spin {
   to { transform: rotate(360deg); }
 }
@@ -961,7 +957,6 @@ async function openManagePlugins(doc, link) {
       el("h2", {className: "modal-title", id: "manage-plugins-title"}, "Manage plugins")),
     el("div", {className: "modal-body"}, error, choices, progressSection),
     el("div", {className: "modal-footer"},
-      el("span", {className: "footer-info"}, "Some changes restart Python, which loads your data again."),
       cancel, apply),
   );
   // The form is what lays out the header, body and footer
