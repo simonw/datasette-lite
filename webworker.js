@@ -1063,14 +1063,40 @@ async def install_resolving_conflicts(requirement, attempts=5, pre=False):
     await micropip.install(requirement, pre=pre)
 
 
-# Install any extra ?install= dependencies. When Datasette itself is a preview
-# release so are the plugins: plugin releases that support a Datasette alpha
-# are published as alphas too, and the stable ones often do not work with it.
-for install in settings["installs"]:
+def normalize_name(name):
+    "A package name as PyPI compares them: Datasette_Leaflet is datasette-leaflet"
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def requirement_name(requirement):
+    """The name of the package that an ?install= value installs, normalized:
+    datasette-leaflet for datasette-leaflet>=0.3 and for the URL of one of
+    its wheels. None if it cannot be told."""
+    wheel = re.search(r"([^/?#]+)\.whl(?:[?#]|$)", requirement)
+    if wheel:
+        return normalize_name(wheel.group(1).split("-")[0])
+    match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement.strip())
+    return normalize_name(match.group(0)) if match else None
+
+
+async def install_plugin(install, in_place=False):
+    """Install one ?install= value. Returns the normalized name of the
+    package it installed, or None if that cannot be told.
+
+    When Datasette itself is a preview release so are the plugins: plugin
+    releases that support a Datasette alpha are published as alphas too, and
+    the stable ones often do not work with it.
+
+    in_place is for a Datasette that is already running - see
+    change_plugins(). A package that has been imported cannot be swapped for
+    another version, so a conflict is then left as the error it is."""
     if not install["source_url"]:
         with step("Installing " + install["requirement"]):
-            await install_resolving_conflicts(install["requirement"], pre=settings["pre"])
-        continue
+            if in_place:
+                await micropip.install(install["requirement"], pre=settings["pre"])
+            else:
+                await install_resolving_conflicts(install["requirement"], pre=settings["pre"])
+        return requirement_name(install["requirement"])
     # ?install=owner/repo, owner/repo@ref or a GitHub URL: run the plugin
     # from the source in that repository
     with step("Installing " + install["repo"]) as plugin_step:
@@ -1111,7 +1137,21 @@ for install in settings["installs"]:
             " (commit {})".format(plugin_commit[:7]) if plugin_commit else ""
         ))
         if plugin_dependencies:
-            await install_resolving_conflicts(plugin_dependencies, pre=settings["pre"])
+            if in_place:
+                await micropip.install(plugin_dependencies, pre=settings["pre"])
+            else:
+                await install_resolving_conflicts(plugin_dependencies, pre=settings["pre"])
+    return normalize_name(plugin_name)
+
+
+# ?install= value -> the name of the package it installed, for every value
+# installed since Python started. Those in use by the running Datasette are
+# active_installs: the Manage plugins dialog can take one out of use, but
+# what it installed stays installed.
+known_installs = {}
+for install in settings["installs"]:
+    known_installs[install["requirement"]] = await install_plugin(install)
+active_installs = dict(known_installs)
 
 
 async def install_missing_requirements():
@@ -1130,8 +1170,7 @@ async def install_missing_requirements():
         except ImportError:
             return
 
-    def normalize(name):
-        return re.sub(r"[-_.]+", "-", name).lower()
+    normalize = normalize_name
 
     # A fix can itself bring in a package with the same problem
     for _ in range(3):
@@ -1342,6 +1381,39 @@ def config_from_pairs(pairs, config=None):
 if settings["config_pairs"]:
     config = config_from_pairs(settings["config_pairs"], config)
 
+def register_datasette_lite_plugin():
+    """Datasette Lite's own plugin, which adds "Manage plugins" to the menu
+    at the top right of every page. The shell page (shell.js) opens a dialog
+    when that link is clicked, and builds it with Datasette's DatasetteModal
+    JavaScript API - new in Datasette 1.0a41, so the link is only added to a
+    Datasette that ships modal.js. The link goes to the list of installed
+    plugins, which is what it shows if the shell does not get the click.
+    Returns True if the plugin was registered."""
+    import pathlib
+    import types
+    import datasette
+    from datasette import hookimpl
+    from datasette.plugins import pm
+
+    if not (pathlib.Path(datasette.__file__).parent / "static" / "modal.js").exists():
+        return False
+    # A module, as plugins are - Datasette lists them by their __name__
+    plugin = types.ModuleType("datasette_lite")
+
+    @hookimpl
+    def menu_links(datasette):
+        return [{
+            "href": datasette.urls.path("/-/plugins") + "#manage-plugins",
+            "label": "Manage plugins",
+        }]
+
+    plugin.menu_links = menu_links
+    pm.register(plugin, name="datasette_lite")
+    return True
+
+
+register_datasette_lite_plugin()
+
 datasette_kwargs = {}
 if config is not None:
     if "config" not in inspect.signature(Datasette.__init__).parameters:
@@ -1354,31 +1426,186 @@ if config is not None:
             config["settings"].pop(key, None)
     datasette_kwargs["config"] = config
 
-ds = Datasette(names, settings={
-    # Keep every URL Datasette generates inside the service worker's scope
-    "base_url": settings["base_url"],
-    # Pyodide has no threads: run SQLite queries inline on the event loop
-    "num_sql_threads": 0,
-}, metadata=metadata, memory=settings["memory"], **datasette_kwargs)
-await ds.invoke_startup()
+async def make_datasette(previous=None, previous_bridge=None):
+    """Create a Datasette and the bridge that requests are sent to it
+    through. With a previous Datasette this is its replacement, serving the
+    same database files - see change_plugins() - which keeps its signing
+    secret and its cookies, so that whoever was signed in still is."""
+    kwargs = dict(datasette_kwargs)
+    if previous is not None:
+        kwargs["secret"] = previous._secret
+    datasette = Datasette(names, settings={
+        # Keep every URL Datasette generates inside the service worker's scope
+        "base_url": settings["base_url"],
+        # Pyodide has no threads: run SQLite queries inline on the event loop
+        "num_sql_threads": 0,
+    }, metadata=metadata, memory=settings["memory"], **kwargs)
+    await datasette.invoke_startup()
+    new_bridge = ASGIBridge(datasette_base_url_fixes(datasette.app(), settings["base_url"]))
+    if previous_bridge is not None:
+        new_bridge.cookies = previous_bridge.cookies
+    await new_bridge.startup()
+    if settings["root"]:
+        # The equivalent of "datasette --root": enable the root actor
+        datasette.root_enabled = True
+        if previous is None:
+            # Sign in by visiting the one-time token URL, so the ds_actor
+            # cookie lands in the bridge's cookie jar - exactly as it would
+            # in a real browser.
+            import secrets
+            datasette._root_token = secrets.token_hex(32)
+            _response = await new_bridge.handle(
+                "GET", settings["base_url"] + "-/auth-token",
+                "token=" + datasette._root_token, [], b"",
+                host="localhost",
+            )
+            if "ds_actor" not in new_bridge.cookies.as_dict():
+                raise ValueError("Could not sign in as root: HTTP {}".format(_response["status"]))
+    return datasette, new_bridge
 
-bridge = ASGIBridge(datasette_base_url_fixes(ds.app(), settings["base_url"]))
-await bridge.startup()
 
-if settings["root"]:
-    # The equivalent of "datasette --root": enable the root actor and sign in
-    # by visiting the one-time token URL, so the ds_actor cookie lands in the
-    # bridge's cookie jar - exactly as it would in a real browser.
-    import secrets
-    ds.root_enabled = True
-    ds._root_token = secrets.token_hex(32)
-    _response = await bridge.handle(
-        "GET", settings["base_url"] + "-/auth-token",
-        "token=" + ds._root_token, [], b"",
-        host="localhost",
-    )
-    if "ds_actor" not in bridge.cookies.as_dict():
-        raise ValueError("Could not sign in as root: HTTP {}".format(_response["status"]))
+ds, bridge = await make_datasette()
+
+
+# --- Changing the plugins of a running Datasette --------------------------------
+#
+# The Manage plugins dialog changes the ?install= values. Where it can that
+# is done here, in the Python that is already running: a new plugin is
+# installed and registered, one that was removed is unregistered, and a new
+# Datasette is created over the same database files. Nothing is downloaded
+# again, and changes made to the data are kept. What cannot be done this way
+# is anything that would replace code that has already been imported -
+# another version of a plugin, say. Then the shell starts everything again
+# in a new worker instead.
+
+class NeedsRestart(Exception):
+    "This change cannot be made to a Python that is already running"
+
+
+# Plugins that are installed but not in use: entry point name -> plugin
+unregistered_plugins = {}
+
+
+def is_installed(name):
+    try:
+        importlib.metadata.version(name)
+        return True
+    except importlib.metadata.PackageNotFoundError:
+        return False
+
+
+def packages_needed_by(roots):
+    "The normalized names of these packages and of everything they require"
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        from micropip._vendored.packaging.src.packaging.requirements import Requirement
+    installed = {
+        normalize_name(dist.metadata["Name"]): dist
+        for dist in importlib.metadata.distributions()
+    }
+    needed = set()
+    stack = list(roots)
+    while stack:
+        name = stack.pop()
+        if name in needed or name not in installed:
+            continue
+        needed.add(name)
+        for line in installed[name].requires or []:
+            requirement = Requirement(line)
+            if requirement.marker and not requirement.marker.evaluate({"extra": ""}):
+                continue
+            stack.append(normalize_name(requirement.name))
+    return needed
+
+
+def sync_plugins(roots):
+    """Register with Datasette the plugins that these packages provide,
+    themselves or through what they require - datasette-cluster-map needs
+    the datasette-leaflet plugin - and unregister every other plugin that
+    was installed with ?install=. A plugin is a "datasette" entry point of
+    an installed package, as it is when Datasette loads them itself."""
+    from datasette.plugins import pm
+    needed = packages_needed_by(roots)
+    for dist in importlib.metadata.distributions():
+        wanted = normalize_name(dist.metadata["Name"]) in needed
+        for entry_point in dist.entry_points:
+            if entry_point.group != "datasette":
+                continue
+            plugin = pm.get_plugin(entry_point.name)
+            if wanted and plugin is None:
+                plugin = unregistered_plugins.pop(entry_point.name, None)
+                if plugin is not None:
+                    pm.register(plugin, name=entry_point.name)
+                    continue
+                plugin = entry_point.load()
+                pm.register(plugin, name=entry_point.name)
+                try:
+                    # How Datasette knows the plugin's name and version
+                    from pluggy._manager import DistFacade
+                    pm._plugin_distinfo.append((plugin, DistFacade(dist)))
+                except Exception:
+                    pass
+            elif plugin is not None and not wanted:
+                pm.unregister(plugin)
+                unregistered_plugins[entry_point.name] = plugin
+
+
+async def change_plugins(installs_json):
+    """Make the running Datasette one with these ?install= values, a list in
+    the format of settings["installs"]. Returns "ok", or "restart" if the
+    change cannot be made here. If it fails, with "restart" or with an
+    exception, Datasette carries on with the plugins it had."""
+    global ds, bridge, active_installs
+    installs = json.loads(installs_json)
+    try:
+        wanted = {}
+        added = False
+        for install in installs:
+            requirement = install["requirement"]
+            if requirement not in known_installs:
+                # Not something that is already installed: neither another
+                # version of it, nor code that has already been imported
+                if install["source_url"]:
+                    name = normalize_name(install["repo"].split("@")[0].split("/")[-1])
+                else:
+                    name = requirement_name(requirement)
+                if name is None or is_installed(name):
+                    raise NeedsRestart()
+                try:
+                    known_installs[requirement] = await install_plugin(install, in_place=True)
+                except ValueError as ex:
+                    if "already installed" in str(ex):
+                        raise NeedsRestart()
+                    raise
+                added = True
+            wanted[requirement] = known_installs[requirement]
+        if None in wanted.values():
+            raise NeedsRestart()
+        importlib.invalidate_caches()
+        if added:
+            await install_missing_requirements()
+        sync_plugins(set(wanted.values()))
+        with step("Restarting Datasette"):
+            new_ds, new_bridge = await make_datasette(ds, bridge)
+    except BaseException as ex:
+        try:
+            sync_plugins(set(active_installs.values()))
+        except Exception:
+            pass
+        if isinstance(ex, NeedsRestart):
+            return "restart"
+        raise
+    previous = ds
+    ds, bridge, active_installs = new_ds, new_bridge, wanted
+    for database in list(previous.databases.values()):
+        try:
+            database.close()
+        except Exception:
+            pass
+    return "ok"
+
+
 finishStep(starting_step)
 `;
 // PYTHON-END startup
@@ -1432,6 +1659,30 @@ def cancel_request(request_id):
         stream.disconnect()
 `;
 
+// ?install= is something for micropip to install - the name of a package
+// on PyPI, usually - or a GitHub repository to run a plugin from the source
+// of. HEAD is the repository's default branch.
+function parseInstalls(installUrls) {
+  return (installUrls || []).filter(Boolean).map(requirement => {
+    if (isOtherGithubUrl(requirement)) {
+      throw new Error(
+        `?install=${requirement} is not the URL of a GitHub repository or of a wheel. ` +
+        `To install a plugin from its repository use ?install=owner/repo, ` +
+        `?install=owner/repo@ref or the URL of the repository, or of a branch, ` +
+        `tag, commit or pull request in it`
+      );
+    }
+    const source = githubSource(requirement);
+    return {
+      requirement,
+      // What the loading screen calls it: owner/repo or owner/repo@ref
+      repo: source && source.repo + (source.ref ? "@" + source.ref : ""),
+      ref: source && source.ref,
+      source_url: source ? `${GITHUB_ZIP_PROXY}/${source.repo}/${source.ref || "HEAD"}` : null,
+    };
+  });
+}
+
 async function startDatasette(settings) {
   let toLoad = [];
   let sources = [];
@@ -1473,27 +1724,7 @@ async function startDatasette(settings) {
       settings.sqlite, SQLITE_WHEELS_URL, PYODIDE_PYTHON_TAG, PYODIDE_PLATFORM_TAG
     );
   }
-  // ?install= is something for micropip to install - the name of a package
-  // on PyPI, usually - or a GitHub repository to run a plugin from the source
-  // of. HEAD is the repository's default branch.
-  const installs = (settings.installUrls || []).filter(Boolean).map(requirement => {
-    if (isOtherGithubUrl(requirement)) {
-      throw new Error(
-        `?install=${requirement} is not the URL of a GitHub repository or of a wheel. ` +
-        `To install a plugin from its repository use ?install=owner/repo, ` +
-        `?install=owner/repo@ref or the URL of the repository, or of a branch, ` +
-        `tag, commit or pull request in it`
-      );
-    }
-    const source = githubSource(requirement);
-    return {
-      requirement,
-      // What the loading screen calls it: owner/repo or owner/repo@ref
-      repo: source && source.repo + (source.ref ? "@" + source.ref : ""),
-      ref: source && source.ref,
-      source_url: source ? `${GITHUB_ZIP_PROXY}/${source.repo}/${source.ref || "HEAD"}` : null,
-    };
-  });
+  const installs = parseInstalls(settings.installUrls);
   const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);
   if (sqliteUrls.length) {
     toLoad.push(...databaseFiles(sqliteUrls));
@@ -1569,6 +1800,7 @@ async function startDatasette(settings) {
   await pyodide.runPythonAsync(HANDLE_PY);
   self.pyHandleRequest = pyodide.globals.get("handle_request");
   self.pyCancelRequest = pyodide.globals.get("cancel_request");
+  self.pyChangePlugins = pyodide.globals.get("change_plugins");
 }
 
 // Answers one request. A response that Datasette sends in a single piece is
@@ -1652,6 +1884,19 @@ self.onmessage = async (event) => {
         type: 'response', id: data.id, status: 500,
         headers: [["content-type", "text/plain; charset=utf-8"]], body
       }, [body]);
+    }
+    return;
+  }
+  if (data.type == 'plugins') {
+    // The Manage plugins dialog: change the ?install= values of the running
+    // Datasette. result is "ok", or "restart" if that takes a new worker -
+    // see change_plugins()
+    try {
+      await readyPromise;
+      const result = await self.pyChangePlugins(JSON.stringify(parseInstalls(data.installUrls)));
+      self.postMessage({type: 'plugins-changed', result});
+    } catch (error) {
+      self.postMessage({type: 'plugins-changed', error: (error && error.message) || String(error)});
     }
     return;
   }
