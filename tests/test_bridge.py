@@ -34,7 +34,7 @@ def run(coro):
 
 
 def test_python_blocks_are_string_raw_safe():
-    for name in ("bridge", "startup"):
+    for name in ("bridge", "startup", "load"):
         source = extract(name)
         assert "`" not in source
         assert "${" not in source

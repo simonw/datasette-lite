@@ -342,11 +342,13 @@ def test_load_buttons(page, static_server):
     csv_url = static_server + "/" + F + "items.csv"
     page.once("dialog", lambda dialog: dialog.accept(csv_url))
     frame.locator("#load-custom button.csv-url").click()
-    page.wait_for_url("**/?csv=*")
-    assert page.url == static_server + "/?csv=" + quote(csv_url, safe="")
-    wait_for_boot(page)
-    expect(page.frame_locator("#datasette").locator("footer").first).to_be_attached()
-    assert database_names(page) == ["data"]
+    # Loaded into the running Datasette and added to the URL: see
+    # test_load_buttons.py
+    wait_for_hash(page, "^/data/items$")
+    assert page.url == (
+        static_server + "/?memory=1&csv=" + quote(csv_url, safe="") + "#/data/items"
+    )
+    assert database_names(page) == ["_memory", "data"]
 
 
 def test_github_and_gist_urls_rewritten(page, static_server):

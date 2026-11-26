@@ -158,14 +158,43 @@ function showStep({id, label, bytes, done}) {
 }
 
 // Keeps the time shown against each step in progress up to date
-const stepTimer = setInterval(() => {
-  for (const step of steps.values()) {
-    step.finished || showStepDetail(step);
-  }
-}, 250);
+let stepTimer = null;
+
+function startStepTimer() {
+  stopStepTimer();
+  stepTimer = setInterval(() => {
+    for (const step of steps.values()) {
+      step.finished || showStepDetail(step);
+    }
+  }, 250);
+}
+
+function stopStepTimer() {
+  clearInterval(stepTimer);
+  stepTimer = null;
+}
+
+startStepTimer();
+
+// The loading screen is shown again, in place of Datasette, while one of the
+// "Load CSV" etc buttons loads a file into it - see loadIntoDatasette()
+function showLoadingScreen(heading) {
+  steps.clear();
+  document.getElementById("loading-logs").replaceChildren();
+  document.querySelector("#loading-indicator h1").textContent = heading;
+  document.body.classList.add("loading-more");
+  document.body.classList.remove("ready");
+  startStepTimer();
+}
+
+function hideLoadingScreen() {
+  document.body.classList.add("ready");
+  document.body.classList.remove("loading-more");
+  stopStepTimer();
+}
 
 function showError(message) {
-  clearInterval(stepTimer);
+  stopStepTimer();
   document.getElementById("loading-indicator").style.display = "none";
   // An error raised by Python arrives as a whole traceback. Its last line says
   // what went wrong, so lead with that and keep the rest a click away.
@@ -185,6 +214,9 @@ const datasetteWorker = new Worker("webworker.js", {type: "module"});
 // port is the MessagePort the service worker is waiting on for the reply.
 const pending = new Map();
 let nextId = 1;
+// Files the worker has been asked to load into the running Datasette, by
+// loadInWorker(): id -> {resolve, reject}
+const loading = new Map();
 
 let failWorkerStartup;
 const workerReady = new Promise((resolve, reject) => {
@@ -197,6 +229,14 @@ const workerReady = new Promise((resolve, reject) => {
       resolve();
     } else if (data.type == "error") {
       reject(new Error(data.error));
+    } else if (data.type == "loaded") {
+      const load = loading.get(data.id);
+      loading.delete(data.id);
+      if (load && data.error != null) {
+        load.reject(new Error(data.error));
+      } else if (load) {
+        load.resolve(data);
+      }
     } else {
       onWorkerResponse(data);
     }
@@ -249,6 +289,22 @@ function failPending(reason) {
     );
   }
   pending.clear();
+  for (const load of loading.values()) {
+    load.reject(new Error(reason));
+  }
+  loading.clear();
+}
+
+// Have the worker load a file into the running Datasette. param is the URL
+// parameter for that type of file: url, csv, json, parquet or sql. Resolves
+// to {path}, the Datasette page that shows what was loaded, or to
+// {reload: true} if it can only be loaded by reloading the page.
+function loadInWorker(param, url) {
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    loading.set(id, {resolve, reject});
+    datasetteWorker.postMessage({type: "load", id, param, url});
+  });
 }
 datasetteWorker.onerror = (event) => {
   // The event has no message when the worker script itself could not be loaded
@@ -676,11 +732,14 @@ function addLoadButtons(doc, parent) {
         return;
       }
       const valid = await checkUrl(url, fileType.mimes);
-      if (valid) {
+      if (!valid) {
+        window.alert(`That ${fileType.param.toUpperCase()} could not be loaded`);
+      } else if (datasetteRunning) {
+        loadIntoDatasette(fileType, url);
+      } else {
+        // Datasette is still starting, or failed to: start again with this
         location.href =
           location.pathname + "?" + fileType.param + "=" + encodeURIComponent(url);
-      } else {
-        window.alert(`That ${fileType.param.toUpperCase()} could not be loaded`);
       }
     });
     form.appendChild(button);
@@ -693,6 +752,45 @@ function addLoadButtons(doc, parent) {
   (parent || doc.body).appendChild(form);
 }
 
+// Set once Datasette has started
+let datasetteRunning = false;
+let loadingIntoDatasette = false;
+
+// Load a file into the Datasette that is already running, then add it to this
+// page's URL - without reloading - so that the URL is still a link to what is
+// on screen. The file is added to whatever the URL already loads.
+async function loadIntoDatasette(fileType, url) {
+  if (loadingIntoDatasette) {
+    return;
+  }
+  loadingIntoDatasette = true;
+  // Appended as text: anything already in the URL is left exactly as it is
+  const search =
+    (location.search.length > 1 ? location.search + "&" : "?") +
+    fileType.param + "=" + encodeURIComponent(url);
+  showLoadingScreen("Loading data");
+  try {
+    const result = await loadInWorker(fileType.param, url);
+    if (result.reload) {
+      // Not something that can be added to a running Datasette - see
+      // LOAD_PY in webworker.js. Loading the new URL does the same thing.
+      location.href = location.pathname + search;
+      return;
+    }
+    history.replaceState(null, "", location.pathname + search + location.hash);
+    // Show what was loaded. The #fragment follows once the iframe has loaded.
+    frame.contentWindow.location.href = result.path;
+  } catch (error) {
+    window.alert(
+      `That ${fileType.param.toUpperCase()} could not be loaded: ` +
+      ((error && error.message) || error).trim().split("\n").pop()
+    );
+  } finally {
+    loadingIntoDatasette = false;
+  }
+  hideLoadingScreen();
+}
+
 // --- Boot ----------------------------------------------------------------------
 
 addLoadButtons(document, document.getElementById("shell-footer"));
@@ -701,7 +799,8 @@ async function main() {
   await Promise.all([registerServiceWorker(), workerReady]);
   navigateFrame(pathFromHash(), false);
   document.body.classList.add("ready");
-  clearInterval(stepTimer);
+  stopStepTimer();
+  datasetteRunning = true;
 }
 
 main().catch((error) => showError((error && error.message) || String(error)));
