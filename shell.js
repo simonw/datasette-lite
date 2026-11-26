@@ -197,13 +197,17 @@ let nextId = 1;
 // once Datasette can answer requests, and rejects if it fails to start.
 function startWorker(message, onStep) {
   const worker = new Worker("webworker.js", {type: "module"});
+  // Replaced by changePluginsInPlace(), for the steps of doing that
+  worker.onStep = onStep;
   let failStartup;
   const ready = new Promise((resolve, reject) => {
     failStartup = reject;
     worker.onmessage = (event) => {
       const data = event.data;
       if (data.type == "step") {
-        onStep(data);
+        worker.onStep(data);
+      } else if (data.type == "plugins-changed") {
+        worker.onPluginsChanged && worker.onPluginsChanged(data);
       } else if (data.type == "ready") {
         resolve();
       } else if (data.type == "error") {
@@ -224,6 +228,7 @@ function startWorker(message, onStep) {
     // failure - Pyodide could not be downloaded, say - so report it instead
     // of leaving the page on "Loading...". A no-op once the worker is ready.
     failStartup(new Error("The Datasette worker failed to start: " + reason));
+    worker.onPluginsChanged && worker.onPluginsChanged({error: reason});
     if (worker === datasetteWorker) {
       failPending("the Datasette worker failed: " + reason);
     }
@@ -654,12 +659,29 @@ function urlWithInstalls(installs) {
   return location.pathname + (parts.length ? "?" + parts.join("&") : "") + location.hash;
 }
 
+// Have the running Datasette change its plugins to these ?install= values,
+// without starting again: see change_plugins() in webworker.js. Resolves to
+// true if it did. If it could not - the change needs a new Python, or a
+// plugin failed to install - Datasette is still running as it was.
+function changePluginsInPlace(installs, onStep) {
+  const worker = datasetteWorker;
+  const previousOnStep = worker.onStep;
+  return new Promise((resolve) => {
+    worker.onStep = onStep;
+    worker.onPluginsChanged = (data) => {
+      worker.onStep = previousOnStep;
+      worker.onPluginsChanged = null;
+      data.error && console.log("Plugins could not be changed in place:", data.error);
+      resolve(data.result == "ok");
+    };
+    worker.postMessage({type: "plugins", installUrls: installs});
+  });
+}
+
 // Restart Datasette with these ?install= values in place of the current
-// ones. A second worker starts up behind the one that is running, which
+// ones, in a new worker. It starts up behind the one that is running, which
 // keeps answering requests until the new one is ready to take over - so if a
 // plugin cannot be installed nothing has changed, and the promise rejects.
-// The page's URL is then updated to match. onStep is called with each step
-// of starting up. The caller reloads the iframe.
 async function restartWithInstalls(installs, onStep) {
   const message = {...startup, installUrls: installs};
   const {worker, ready} = startWorker(message, onStep);
@@ -671,10 +693,25 @@ async function restartWithInstalls(installs, onStep) {
   }
   const previous = datasetteWorker;
   datasetteWorker = worker;
-  startup = message;
   // Requests the previous worker had not finished answering
   failPending("Datasette was restarted");
   previous.terminate();
+}
+
+// Change the plugins to these ?install= values, then update the page's URL
+// to match. The running Datasette does it itself if it can, which takes a
+// moment and keeps changes made to the data. Otherwise - and if that fails,
+// so that the error reported is one from a clean start - Datasette is
+// started again from nothing. onStep is called with each step of either,
+// and with {reset: true} when the second takes over from the first. Rejects,
+// with nothing changed, if Datasette cannot run with those plugins. The
+// caller reloads the iframe.
+async function applyInstalls(installs, onStep) {
+  if (!(await changePluginsInPlace(installs, onStep))) {
+    onStep({reset: true});
+    await restartWithInstalls(installs, onStep);
+  }
+  startup = {...startup, installUrls: installs};
   history.replaceState(null, "", urlWithInstalls(installs));
 }
 
@@ -898,8 +935,8 @@ async function openManagePlugins(doc, link) {
   const progress = el("ol", {className: "mp-progress"});
   progress.setAttribute("role", "log");
   progress.setAttribute("aria-label", "Restart progress");
-  const progressSection = el("div", {hidden: true},
-    el("h3", null, "Restarting Datasette"), progress);
+  const heading = el("h3", null, "Updating plugins");
+  const progressSection = el("div", {hidden: true}, heading, progress);
   const directory = el("a", {href: "https://datasette.io/plugins"}, "Datasette plugins directory");
   const choices = el("div", null,
     el("h3", null, "Installed plugins"),
@@ -917,15 +954,14 @@ async function openManagePlugins(doc, link) {
   const cancel = el("button", {type: "button", className: "modal-btn modal-btn-ghost"}, "Cancel");
   const apply = el("button", {
     type: "submit", className: "modal-btn modal-btn-primary", disabled: true,
-  }, "Apply and restart");
+  }, "Apply");
   const form = el("form", {noValidate: true},
     el("style", null, MANAGE_PLUGINS_CSS),
     el("div", {className: "modal-header"},
       el("h2", {className: "modal-title", id: "manage-plugins-title"}, "Manage plugins")),
     el("div", {className: "modal-body"}, error, choices, progressSection),
     el("div", {className: "modal-footer"},
-      el("span", {className: "footer-info"},
-        "Restarting reloads your data. Changes made to it in this tab are lost."),
+      el("span", {className: "footer-info"}, "Some changes restart Python, which loads your data again."),
       cancel, apply),
   );
   // The form is what lays out the header, body and footer
@@ -952,7 +988,16 @@ async function openManagePlugins(doc, link) {
   dialog.addEventListener("close", () => modal.remove());
 
   const steps = new Map(); // id -> <li>
-  const onStep = ({id, label, done}) => {
+  const onStep = ({id, label, done, reset}) => {
+    if (reset) {
+      // Starting again in a new worker, which finishes a "pyodide" step
+      // without having started it
+      steps.clear();
+      progress.replaceChildren();
+      heading.textContent = "Restarting Datasette";
+      onStep({id: "pyodide", label: "Loading Python (Pyodide)"});
+      return;
+    }
     let item = steps.get(id);
     if (!item) {
       item = el("li");
@@ -965,13 +1010,6 @@ async function openManagePlugins(doc, link) {
     done && item.classList.add("done");
     item.scrollIntoView({block: "nearest"});
   };
-  // "pyodide" is a step the worker finishes without having started it
-  const reset = () => {
-    steps.clear();
-    progress.replaceChildren();
-    onStep({id: "pyodide", label: "Loading Python (Pyodide)"});
-  };
-
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     if (modal.busy || !changed()) {
@@ -981,20 +1019,22 @@ async function openManagePlugins(doc, link) {
     const controls = [...form.querySelectorAll("input"), apply, cancel];
     modal.busy = true;
     controls.forEach((control) => { control.disabled = true; });
-    apply.textContent = "Restarting\u2026";
+    apply.textContent = "Applying\u2026";
     error.hidden = true;
     choices.hidden = true;
     progressSection.hidden = false;
-    reset();
+    steps.clear();
+    progress.replaceChildren();
+    heading.textContent = "Updating plugins";
     try {
-      await restartWithInstalls(installs, onStep);
+      await applyInstalls(installs, onStep);
     } catch (failure) {
       // Nothing has changed: Datasette is still running as it was
       modal.busy = false;
       controls.forEach((control) => { control.disabled = false; });
-      apply.textContent = "Apply and restart";
+      apply.textContent = "Apply";
       const lines = String((failure && failure.message) || failure).trim().split("\n");
-      error.textContent = "Datasette could not be restarted with those plugins, so " +
+      error.textContent = "Datasette could not run with those plugins, so " +
         "nothing has changed. " + lines[lines.length - 1];
       error.hidden = false;
       choices.hidden = false;
