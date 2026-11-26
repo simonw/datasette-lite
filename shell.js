@@ -44,7 +44,9 @@ function fixUrl(url) {
 }
 
 const urlParams = new URLSearchParams(location.search);
-const startup = {
+// What the worker is started with. Replaced when Datasette is restarted with
+// different plugins - see restartWithInstalls()
+let startup = {
   type: "startup",
   ref: urlParams.get("ref"),
   sqlite: urlParams.get("sqlite"),
@@ -211,8 +213,9 @@ function showError(message) {
 
 // --- The Pyodide worker ------------------------------------------------------
 
-// A module worker: Pyodide is loaded with import(), see webworker.js
-const datasetteWorker = new Worker("webworker.js", {type: "module"});
+// The worker that answers requests. A module worker: Pyodide is loaded with
+// import(), see webworker.js. Replaced by restartWithInstalls().
+let datasetteWorker = null;
 // Requests the worker has not finished answering: id -> {port, streaming}.
 // port is the MessagePort the service worker is waiting on for the reply.
 const pending = new Map();
@@ -221,30 +224,63 @@ let nextId = 1;
 // loadInWorker(): id -> {resolve, reject}
 const loading = new Map();
 
-let failWorkerStartup;
-const workerReady = new Promise((resolve, reject) => {
-  failWorkerStartup = reject;
-  datasetteWorker.onmessage = (event) => {
-    const data = event.data;
-    if (data.type == "step") {
-      showStep(data);
-    } else if (data.type == "ready") {
-      resolve();
-    } else if (data.type == "error") {
-      reject(new Error(data.error));
-    } else if (data.type == "loaded") {
-      const load = loading.get(data.id);
-      loading.delete(data.id);
-      if (load && data.error != null) {
-        load.reject(new Error(data.error));
-      } else if (load) {
-        load.resolve(data);
+// Start a worker, and Datasette in it. onStep is called with each step of
+// starting up. Returns {worker, ready} - ready is a promise that resolves
+// once Datasette can answer requests, and rejects if it fails to start.
+function startWorker(message, onStep) {
+  const worker = new Worker("webworker.js", {type: "module"});
+  // Replaced by changePluginsInPlace(), for the steps of doing that
+  worker.onStep = onStep;
+  let failStartup;
+  const ready = new Promise((resolve, reject) => {
+    failStartup = reject;
+    worker.onmessage = (event) => {
+      const data = event.data;
+      if (data.type == "step") {
+        worker.onStep(data);
+      } else if (data.type == "plugins-changed") {
+        worker.onPluginsChanged && worker.onPluginsChanged(data);
+      } else if (data.type == "loaded") {
+        const load = loading.get(data.id);
+        loading.delete(data.id);
+        if (load && data.error != null) {
+          load.reject(new Error(data.error));
+        } else if (load) {
+          load.resolve(data);
+        }
+      } else if (data.type == "ready") {
+        resolve();
+      } else if (data.type == "error") {
+        reject(new Error(data.error));
+      } else {
+        onWorkerResponse(data);
       }
-    } else {
-      onWorkerResponse(data);
+    };
+  });
+  // If the worker dies (out of memory, say) nothing will ever answer the
+  // requests waiting on it, so fail them rather than leave them hanging. A
+  // worker that is still starting up behind a running one has no requests.
+  worker.onerror = (event) => {
+    // The event has no message when the worker script itself could not be loaded
+    const reason =
+      (event && event.message) || "the worker script webworker.js could not be loaded or run";
+    // While Datasette is still starting nothing is pending: this is a startup
+    // failure - Pyodide could not be downloaded, say - so report it instead
+    // of leaving the page on "Loading...". A no-op once the worker is ready.
+    failStartup(new Error("The Datasette worker failed to start: " + reason));
+    worker.onPluginsChanged && worker.onPluginsChanged({error: reason});
+    if (worker === datasetteWorker) {
+      failPending("the Datasette worker failed: " + reason);
     }
   };
-});
+  worker.onmessageerror = () => {
+    if (worker === datasetteWorker) {
+      failPending("a message from the Datasette worker could not be read");
+    }
+  };
+  worker.postMessage(message);
+  return {worker, ready};
+}
 
 // A response is either a single "response" message, or - when Datasette sends
 // it in several pieces, as it does for server-sent events - "response-start",
@@ -273,8 +309,7 @@ function onWorkerResponse(data) {
   }
 }
 
-// If the worker dies (out of memory, say) nothing will ever answer the
-// requests waiting on it, so fail them rather than leave them hanging.
+// Fail every request that is waiting for an answer
 function failPending(reason) {
   const message = "Datasette Lite error: " + reason;
   for (const request of pending.values()) {
@@ -309,21 +344,8 @@ function loadInWorker(param, url) {
     datasetteWorker.postMessage({type: "load", id, param, url});
   });
 }
-datasetteWorker.onerror = (event) => {
-  // The event has no message when the worker script itself could not be loaded
-  const reason =
-    (event && event.message) || "the worker script webworker.js could not be loaded or run";
-  // While Datasette is still starting nothing is pending: this is a startup
-  // failure - Pyodide could not be downloaded, say - so show it instead of
-  // leaving the page on "Loading...". A no-op once the worker is ready.
-  failWorkerStartup(new Error("The Datasette worker failed to start: " + reason));
-  failPending("the Datasette worker failed: " + reason);
-};
-datasetteWorker.onmessageerror = () => {
-  failPending("a message from the Datasette worker could not be read");
-};
-
-datasetteWorker.postMessage(startup);
+let workerReady;
+({worker: datasetteWorker, ready: workerReady} = startWorker(startup, showStep));
 
 // Have the worker answer a request, replying on port. stream says whether the
 // service worker can take the response in pieces - one from an older release
@@ -593,6 +615,16 @@ function enhanceDocument(doc) {
       return;
     }
     if (
+      url.hash == "#manage-plugins" && link.closest(".nav-menu") &&
+      doc.defaultView.DatasetteModal
+    ) {
+      ev.preventDefault();
+      // Close the menu the link is in
+      link.closest("details").open = false;
+      openManagePlugins(doc, link);
+      return;
+    }
+    if (
       link.hasAttribute("download") &&
       url.origin === location.origin && isAppPath(url.pathname)
     ) {
@@ -624,6 +656,450 @@ function enhanceDocument(doc) {
     }
   });
   addLoadButtons(doc);
+}
+
+// --- The "Manage plugins" dialog ----------------------------------------------
+//
+// Datasette Lite's own plugin (register_datasette_lite_plugin() in
+// webworker.js) adds a "Manage plugins" link to Datasette's menu. Clicking it
+// opens this dialog, built with Datasette's DatasetteModal API inside the
+// page in the iframe. It lists the installed plugins and some suggested ones,
+// and applying a change restarts Datasette with the new set of ?install=
+// values - without reloading this page.
+
+// Each of these has been tried with the Datasette that runs by default
+const SUGGESTED_PLUGINS = [
+  ["datasette-charts", "Charts of tables and SQL query results"],
+  ["datasette-maplibre", "Maps of latitude/longitude and GeoJSON data"],
+  ["datasette-search-all", "Search every searchable table at once"],
+  ["datasette-render-markdown", "Render Markdown values as HTML"],
+  ["datasette-pretty-json", "Pretty-print values that are JSON"],
+];
+
+// The name of the package an ?install= value installs, as best as can be
+// told without installing it: datasette-leaflet>=0.3, owner/repo@ref and the
+// URL of a wheel all work. Normalized as PyPI does, to compare names.
+function installName(requirement) {
+  let name = requirement.trim();
+  const wheel = /([^\/?#]+)\.whl([?#]|$)/.exec(name);
+  if (wheel) {
+    name = wheel[1].split("-")[0];
+  } else if (name.includes("/")) {
+    // A GitHub repository, or the URL of a page in one
+    const repo = /^(?:https?:\/\/[^\/]+\/)?[^\/]+\/([^\/@]+)/.exec(name);
+    name = repo ? repo[1].replace(/\.git$/, "") : name;
+  }
+  name = (/^[A-Za-z0-9._-]+/.exec(name) || [name])[0];
+  return name.replace(/[-_.]+/g, "-").toLowerCase();
+}
+
+// The page's URL with its ?install= parameters replaced by these. Everything
+// else is kept exactly as it was written, #fragment included.
+function urlWithInstalls(installs) {
+  const parts = location.search.replace(/^\?/, "").split("&").filter((part) => {
+    if (!part) {
+      return false;
+    }
+    try {
+      return decodeURIComponent(part.split("=")[0].replace(/\+/g, " ")) != "install";
+    } catch (e) {
+      return true;
+    }
+  });
+  for (const install of installs) {
+    // Left readable: datasette-leaflet==0.3, owner/repo@ref, https://...
+    parts.push(
+      "install=" + encodeURIComponent(install).replace(/%(2F|3A|40|3D|2C)/gi, decodeURIComponent)
+    );
+  }
+  return location.pathname + (parts.length ? "?" + parts.join("&") : "") + location.hash;
+}
+
+// Have the running Datasette change its plugins to these ?install= values,
+// without starting again: see change_plugins() in webworker.js. Resolves to
+// true if it did. If it could not - the change needs a new Python, or a
+// plugin failed to install - Datasette is still running as it was.
+function changePluginsInPlace(installs, onStep) {
+  const worker = datasetteWorker;
+  const previousOnStep = worker.onStep;
+  return new Promise((resolve) => {
+    worker.onStep = onStep;
+    worker.onPluginsChanged = (data) => {
+      worker.onStep = previousOnStep;
+      worker.onPluginsChanged = null;
+      data.error && console.log("Plugins could not be changed in place:", data.error);
+      resolve(data.result == "ok");
+    };
+    worker.postMessage({type: "plugins", installUrls: installs});
+  });
+}
+
+// Restart Datasette with these ?install= values in place of the current
+// ones, in a new worker. It starts up behind the one that is running, which
+// keeps answering requests until the new one is ready to take over - so if a
+// plugin cannot be installed nothing has changed, and the promise rejects.
+async function restartWithInstalls(installs, onStep) {
+  const message = {...startup, installUrls: installs};
+  const {worker, ready} = startWorker(message, onStep);
+  try {
+    await ready;
+  } catch (error) {
+    worker.terminate();
+    throw error;
+  }
+  const previous = datasetteWorker;
+  datasetteWorker = worker;
+  // Requests the previous worker had not finished answering
+  failPending("Datasette was restarted");
+  previous.terminate();
+}
+
+// Change the plugins to these ?install= values, then update the page's URL
+// to match. The running Datasette does it itself if it can, which takes a
+// moment and keeps changes made to the data. Otherwise - and if that fails,
+// so that the error reported is one from a clean start - Datasette is
+// started again from nothing. onStep is called with each step of either,
+// and with {reset: true} when the second takes over from the first. Rejects,
+// with nothing changed, if Datasette cannot run with those plugins. The
+// caller reloads the iframe.
+async function applyInstalls(installs, onStep) {
+  if (!(await changePluginsInPlace(installs, onStep))) {
+    onStep({reset: true});
+    await restartWithInstalls(installs, onStep);
+  }
+  startup = {...startup, installUrls: installs};
+  history.replaceState(null, "", urlWithInstalls(installs));
+}
+
+const MANAGE_PLUGINS_CSS = `
+#manage-plugins-dialog .modal-body {
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+/* Datasette's stylesheet gives these elements a display of their own */
+#manage-plugins-dialog [hidden] {
+  display: none !important;
+}
+#manage-plugins-dialog h3 {
+  margin: 1.1rem 0 0.4rem 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+#manage-plugins-dialog h3:first-child {
+  margin-top: 0;
+}
+#manage-plugins-dialog ul,
+#manage-plugins-dialog ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+#manage-plugins-dialog .mp-plugins li {
+  padding: 0.2rem 0;
+}
+#manage-plugins-dialog .mp-plugins label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+#manage-plugins-dialog .mp-plugins li.mp-fixed {
+  padding-left: 1.55rem;
+}
+#manage-plugins-dialog .mp-plugins input {
+  flex: none;
+  margin: 0;
+  width: 1.05rem;
+  height: 1.05rem;
+  position: relative;
+  top: 0.15rem;
+}
+#manage-plugins-dialog .mp-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+#manage-plugins-dialog .mp-detail,
+#manage-plugins-dialog .mp-help,
+#manage-plugins-dialog .mp-empty {
+  color: var(--muted);
+}
+#manage-plugins-dialog .mp-help {
+  margin: 0.4rem 0 0 0;
+  font-size: 0.8rem;
+}
+#manage-plugins-dialog code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.95em;
+  background: var(--paper);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+}
+#manage-plugins-dialog input[type="text"] {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  font: inherit;
+  /* 16px or more, or iOS Safari zooms in when it is focused */
+  font-size: 1rem;
+  color: var(--ink);
+  background: #fff;
+}
+#manage-plugins-dialog input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+#manage-plugins-dialog .mp-error {
+  margin: 0 0 1rem 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 5px;
+  background: #fdecec;
+  color: #8a1c1c;
+  overflow-wrap: anywhere;
+}
+#manage-plugins-dialog .mp-progress li {
+  position: relative;
+  padding: 0.15rem 0 0.15rem 1.4rem;
+  overflow-wrap: anywhere;
+}
+#manage-plugins-dialog .mp-progress li::before {
+  content: "";
+  position: absolute;
+  left: 0.1rem;
+  top: 0.4rem;
+  box-sizing: border-box;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid var(--rule);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: mp-spin 0.8s linear infinite;
+}
+#manage-plugins-dialog .mp-progress li.done {
+  color: var(--muted);
+}
+#manage-plugins-dialog .mp-progress li.done::before {
+  content: "\\2713";
+  top: 0.1rem;
+  width: auto;
+  height: auto;
+  border: 0;
+  animation: none;
+  color: #2e7d4f;
+  font-weight: 700;
+}
+@keyframes mp-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #manage-plugins-dialog .mp-progress li::before {
+    animation-duration: 4s;
+  }
+}
+`;
+
+// The plugins Datasette says are installed: [{name, version}], without
+// Datasette Lite's own. Empty if Datasette will not say.
+async function installedPlugins() {
+  try {
+    const response = await fetch(APP_BASE + "-/plugins.json");
+    const plugins = response.ok ? await response.json() : [];
+    return plugins.filter((plugin) => plugin.name != "datasette_lite");
+  } catch (error) {
+    return [];
+  }
+}
+
+// Open the dialog in doc, the page in the iframe. link is the menu item.
+async function openManagePlugins(doc, link) {
+  const DatasetteModal = doc.defaultView.DatasetteModal;
+  const existing = doc.getElementById("manage-plugins-dialog");
+  existing && existing.parentNode.remove();
+  const plugins = await installedPlugins();
+  const current = startup.installUrls.filter(Boolean);
+
+  // el("p", {className: "x"}, "text", otherElement)
+  const el = (tag, props, ...children) => {
+    const element = Object.assign(doc.createElement(tag), props || {});
+    element.append(...children);
+    return element;
+  };
+  const versions = new Map(
+    plugins.map((plugin) => [installName(plugin.name), plugin.version])
+  );
+  const checkbox = (value, checked) => el("input", {type: "checkbox", value, checked});
+
+  // Installed: one row for each ?install= value, which unticking removes,
+  // then the plugins that came with those - as their dependencies
+  const installedList = el("ul", {className: "mp-plugins mp-installed"});
+  const listed = new Set();
+  for (const install of current) {
+    const name = installName(install);
+    listed.add(name);
+    const version = versions.get(name);
+    installedList.append(el("li", null, el("label", null,
+      checkbox(install, true),
+      el("span", null,
+        el("span", {className: "mp-name"}, install),
+        // Not for datasette-leaflet==0.3, which says it already
+        version && !install.includes(version)
+          ? el("span", {className: "mp-detail"}, " " + version) : "",
+      ),
+    )));
+  }
+  for (const plugin of plugins) {
+    const name = installName(plugin.name);
+    if (!listed.has(name)) {
+      listed.add(name);
+      installedList.append(el("li", {className: "mp-fixed"},
+        el("span", {className: "mp-name"}, plugin.name),
+        el("span", {className: "mp-detail"},
+          (plugin.version ? " " + plugin.version : "") + " - needed by another plugin"),
+      ));
+    }
+  }
+  const suggestedList = el("ul", {className: "mp-plugins mp-suggested"});
+  for (const [name, description] of SUGGESTED_PLUGINS) {
+    if (!listed.has(name)) {
+      suggestedList.append(el("li", null, el("label", null,
+        checkbox(name, false),
+        el("span", null,
+          el("span", {className: "mp-name"}, name),
+          el("span", {className: "mp-detail"}, " - " + description),
+        ),
+      )));
+    }
+  }
+  const other = el("input", {
+    type: "text", id: "manage-plugins-other", name: "plugin",
+    placeholder: "datasette-plugin-name",
+    autocomplete: "off", autocapitalize: "off", spellcheck: false,
+  });
+  other.setAttribute("aria-describedby", "manage-plugins-other-help");
+  const error = el("div", {className: "mp-error", hidden: true});
+  error.setAttribute("role", "alert");
+  const progress = el("ol", {className: "mp-progress"});
+  progress.setAttribute("role", "log");
+  progress.setAttribute("aria-label", "Restart progress");
+  const heading = el("h3", null, "Updating plugins");
+  const progressSection = el("div", {hidden: true}, heading, progress);
+  const directory = el("a", {href: "https://datasette.io/plugins"}, "Datasette plugins directory");
+  const choices = el("div", null,
+    el("h3", null, "Installed plugins"),
+    installedList.children.length
+      ? installedList : el("p", {className: "mp-empty"}, "No plugins are installed."),
+    ...(suggestedList.children.length ? [el("h3", null, "Suggested plugins"), suggestedList] : []),
+    el("h3", null, el("label", {htmlFor: "manage-plugins-other"}, "Add another plugin")),
+    other,
+    el("p", {className: "mp-help", id: "manage-plugins-other-help"},
+      "The name of a plugin from the ", directory,
+      ". You can also use ", el("code", null, "plugin-name==0.3"),
+      " to install a specific version. Separate several plugins with spaces."),
+  );
+
+  const cancel = el("button", {type: "button", className: "modal-btn modal-btn-ghost"}, "Cancel");
+  const apply = el("button", {
+    type: "submit", className: "modal-btn modal-btn-primary", disabled: true,
+  }, "Apply");
+  const form = el("form", {noValidate: true},
+    el("style", null, MANAGE_PLUGINS_CSS),
+    el("div", {className: "modal-header"},
+      el("h2", {className: "modal-title", id: "manage-plugins-title"}, "Manage plugins")),
+    el("div", {className: "modal-body"}, error, choices, progressSection),
+    el("div", {className: "modal-footer"},
+      cancel, apply),
+  );
+  // The form is what lays out the header, body and footer
+  form.style.cssText = "display: flex; flex-direction: column; min-height: 0; margin: 0;";
+
+  const modal = DatasetteModal.create();
+  const dialog = modal.dialog;
+  dialog.id = "manage-plugins-dialog";
+  dialog.setAttribute("aria-labelledby", "manage-plugins-title");
+  dialog.append(form);
+
+  // The ?install= values the dialog is asking for, in order
+  const chosen = () => {
+    const installs = [...form.querySelectorAll("input[type=checkbox]:checked")]
+      .map((input) => input.value)
+      .concat(other.value.split(/\s+/).filter(Boolean));
+    return [...new Set(installs)];
+  };
+  const changed = () => JSON.stringify(chosen()) != JSON.stringify(current);
+  form.addEventListener("input", () => {
+    apply.disabled = !changed();
+  });
+  cancel.addEventListener("click", () => modal.requestClose("cancel"));
+  dialog.addEventListener("close", () => modal.remove());
+
+  const steps = new Map(); // id -> <li>
+  const onStep = ({id, label, done, reset}) => {
+    if (reset) {
+      // Starting again in a new worker, which finishes a "pyodide" step
+      // without having started it
+      steps.clear();
+      progress.replaceChildren();
+      heading.textContent = "Restarting Datasette";
+      onStep({id: "pyodide", label: "Loading Python (Pyodide)"});
+      return;
+    }
+    let item = steps.get(id);
+    if (!item) {
+      item = el("li");
+      steps.set(id, item);
+      progress.append(item);
+    }
+    if (label != null) {
+      item.textContent = label;
+    }
+    done && item.classList.add("done");
+    item.scrollIntoView({block: "nearest"});
+  };
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (modal.busy || !changed()) {
+      return;
+    }
+    const installs = chosen();
+    const controls = [...form.querySelectorAll("input"), apply, cancel];
+    modal.busy = true;
+    controls.forEach((control) => { control.disabled = true; });
+    apply.textContent = "Applying\u2026";
+    error.hidden = true;
+    choices.hidden = true;
+    progressSection.hidden = false;
+    steps.clear();
+    progress.replaceChildren();
+    heading.textContent = "Updating plugins";
+    try {
+      await applyInstalls(installs, onStep);
+    } catch (failure) {
+      // Nothing has changed: Datasette is still running as it was
+      modal.busy = false;
+      controls.forEach((control) => { control.disabled = false; });
+      apply.textContent = "Apply";
+      const lines = String((failure && failure.message) || failure).trim().split("\n");
+      error.textContent = "Datasette could not run with those plugins, so " +
+        "nothing has changed. " + lines[lines.length - 1];
+      error.hidden = false;
+      choices.hidden = false;
+      progressSection.hidden = true;
+      error.scrollIntoView({block: "nearest"});
+      return;
+    }
+    // The new Datasette renders the page again, without this dialog. A
+    // plugin that was removed may have been what served this page.
+    doc.defaultView.location.reload();
+  });
+
+  doc.body.append(modal);
+  modal.show({returnFocusTo: link, initialFocus: other});
 }
 
 // --- The "Load SQLite DB by URL" etc buttons ----------------------------------
@@ -780,6 +1256,10 @@ async function loadIntoDatasette(fileType, url) {
       location.href = location.pathname + search;
       return;
     }
+    // What a new worker would be started with, if a change of plugins needs
+    // one - see restartWithInstalls()
+    const setting = fileType.param == "url" ? "sqliteUrls" : fileType.param + "Urls";
+    startup = {...startup, [setting]: [...startup[setting], url]};
     history.replaceState(null, "", location.pathname + search + location.hash);
     // Show what was loaded. The #fragment follows once the iframe has loaded.
     frame.contentWindow.location.href = result.path;

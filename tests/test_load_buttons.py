@@ -141,3 +141,19 @@ def test_load_replaces_the_default_databases(page, static_server, ref):
     frame.locator("a[href$='/']").first.click()
     wait_for_hash(page, "^/$")
     expect(frame.locator("body")).not_to_contain_text("fixtures")
+
+
+def test_loaded_data_survives_a_change_of_plugins(page, static_server, stream_plugin):
+    "The Manage plugins dialog changes plugins in place, or in a new worker"
+    start(page, static_server + "/?url=" + F + "generated/demo.db")
+    click_load(page, "csv-url", static_server + "/" + F + "items.csv", "^/data/items$")
+    click_load(page, "db-url", static_server + "/" + F + "generated/other.db", "^/other$")
+    # In place: a new Datasette over the same files
+    page.evaluate("installs => applyInstalls(installs, () => {})", [stream_plugin])
+    assert database_names(page) == ["demo", "other", "data"]
+    assert table_names(page) == ["items"]
+    assert "&csv=" in search(page) and "install=" in search(page)
+    # In a new worker, which is started with what was loaded since
+    page.evaluate("installs => restartWithInstalls(installs, () => {})", [])
+    assert database_names(page) == ["demo", "other", "data"]
+    assert table_names(page) == ["items"]

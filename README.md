@@ -267,6 +267,18 @@ Plugins that load their own JavaScript and CSS now work, as do plugins that acce
 
 Because Datasette Lite runs a preview release of Datasette by default, `?install=` also picks the most recent preview release of each plugin - that is where plugin authors publish support for the Datasette alphas. Some plugins do not work with the latest alpha yet. If one misbehaves, add `?ref=stable` to run it against the stable Datasette release, which installs the plugin's stable release too.
 
+### The Manage plugins dialog
+
+Datasette's menu - the icon at the top right of every page - has a **Manage plugins** item. It opens a dialog that lists the plugins that are installed, with a checkbox next to each one that you can untick to remove it, some suggested plugins to tick, and a text box for the name of any other plugin. That box accepts anything `?install=` does, such as `plugin-name==0.3` for a specific version.
+
+Applying your changes does not reload the page. The `?install=` parameters in the URL are updated to match, so the URL in your browser can still be bookmarked or shared.
+
+Where it can, the Datasette that is already running makes the change itself: a new plugin is installed and registered, a removed one is unregistered, and Datasette restarts over the same database files. That takes a second or two, nothing is downloaded again, you stay signed in and changes you made to the data are kept - other than to the in-memory `_memory` database, which starts out empty again. A plugin that was removed stays installed, unused, until the page is reloaded.
+
+Python cannot replace code it has already imported, so a change that would need that - a different version of a plugin that is installed, for example - starts Python and Datasette again from nothing instead, loading your data again from where it came from. The Datasette you were using keeps running until the new one is ready. Either way, if a plugin cannot be installed the dialog says why and nothing changes.
+
+The dialog is built with the JavaScript API for modal dialogs that was added in Datasette 1.0a41, so the menu item is not shown for older versions, such as `?ref=stable`.
+
 ### Plugins from a GitHub repository
 
 To try a plugin's unreleased code, give `?install=` its GitHub repository instead of its name on PyPI - either as `owner/repo` or as the URL of the repository:
@@ -361,6 +373,7 @@ uv run --python 3.12 \
 - `tests/test_datasette_lite.py` - the original browser tests, loading the default databases.
 - `tests/test_url_patterns.py` - every supported `?` option and `#` URL pattern, using the small files in `tests/fixtures/`.
 - `tests/test_plugins_and_post.py` - JavaScript (core and plugins), POST forms, CSRF, sign-in, uploads, downloads, the 1.0 alpha write API, multiple tabs, other pages open on the same origin, worker failures, a cross-origin page in the iframe and service worker restarts.
+- `tests/test_manage_plugins.py` - the Manage plugins dialog: installing and removing plugins in the running Datasette, and starting again in a new worker when that is not possible.
 - `tests/test_streaming.py` - responses that arrive over time, using the plugin in `tests/plugins/`.
 
 Tests that download from third-party hosts beyond Pyodide, PyPI and the default databases are marked `network`; skip them with `-m "not network"`. To use an existing Chromium binary set `CHROMIUM_EXECUTABLE=/path/to/chrome`. If the browser needs an HTTPS proxy set `DATASETTE_LITE_TEST_PROXY` (or `HTTPS_PROXY`).
