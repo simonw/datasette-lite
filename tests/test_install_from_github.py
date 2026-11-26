@@ -316,7 +316,11 @@ def test_install_from_repository(page, static_server, install, ref):
             return (await fetch(base + "/-/plugins.json")).json();
         }"""
     )
-    assert [(plugin["name"], plugin["version"]) for plugin in plugins] == [
+    assert [
+        (plugin["name"], plugin["version"]) for plugin in plugins
+        # Datasette Lite's own plugin, which adds "Manage plugins" to the menu
+        if plugin["name"] != "datasette_lite"
+    ] == [
         ("datasette-lite-test-stream", "0.2")
     ]
     # And it runs

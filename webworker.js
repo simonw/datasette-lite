@@ -1342,6 +1342,39 @@ def config_from_pairs(pairs, config=None):
 if settings["config_pairs"]:
     config = config_from_pairs(settings["config_pairs"], config)
 
+def register_datasette_lite_plugin():
+    """Datasette Lite's own plugin, which adds "Manage plugins" to the menu
+    at the top right of every page. The shell page (shell.js) opens a dialog
+    when that link is clicked, and builds it with Datasette's DatasetteModal
+    JavaScript API - new in Datasette 1.0a41, so the link is only added to a
+    Datasette that ships modal.js. The link goes to the list of installed
+    plugins, which is what it shows if the shell does not get the click.
+    Returns True if the plugin was registered."""
+    import pathlib
+    import types
+    import datasette
+    from datasette import hookimpl
+    from datasette.plugins import pm
+
+    if not (pathlib.Path(datasette.__file__).parent / "static" / "modal.js").exists():
+        return False
+    # A module, as plugins are - Datasette lists them by their __name__
+    plugin = types.ModuleType("datasette_lite")
+
+    @hookimpl
+    def menu_links(datasette):
+        return [{
+            "href": datasette.urls.path("/-/plugins") + "#manage-plugins",
+            "label": "Manage plugins",
+        }]
+
+    plugin.menu_links = menu_links
+    pm.register(plugin, name="datasette_lite")
+    return True
+
+
+register_datasette_lite_plugin()
+
 datasette_kwargs = {}
 if config is not None:
     if "config" not in inspect.signature(Datasette.__init__).parameters:
