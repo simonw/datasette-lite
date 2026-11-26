@@ -195,11 +195,13 @@ def test_s_template_debug(page, static_server):
     boot(page, static_server + "/?memory=1&s.template_debug=1")
     base = iframe_base(page)
     assert table_json(page, base + "/-/settings.json")["template_debug"] is True
-    # ?_context=1 only shows the template context when template_debug is on
+    # ?_context=1 only shows the template context when template_debug is on.
+    # Up to Datasette 1.0a43 that was the context as JSON in a <pre>; since
+    # 1.0a44 it is a page describing each variable.
     html = datasette_frame(page).evaluate(
         "async path => (await fetch(path)).text()", base + "/?_context=1"
     )
-    assert html.startswith("<pre>{")
+    assert html.startswith("<pre>{") or "template context</title>" in html
     assert "datasette_version" in html
 
 
@@ -210,7 +212,10 @@ def test_s_multiple_nested_and_over_config(page, static_server):
         + "/?config={F}config.yml&csv={F}items.csv".format(F=F)
         + "&s.settings.default_page_size=3&s.max_returned_rows=7"
         + "&s.plugins.demo.options=" + quote('{"a": [1, 2]}')
-        + "&s.base_url=/should-be-ignored/",
+        + "&s.base_url=/should-be-ignored/"
+        # /-/config.json needs the permissions-debug permission since
+        # Datasette 1.0a44, which the root actor has
+        + "&root=1",
     )
     base = iframe_base(page)
     settings = table_json(page, base + "/-/settings.json")
@@ -387,11 +392,13 @@ def test_load_buttons(page, static_server):
     csv_url = static_server + "/" + F + "items.csv"
     page.once("dialog", lambda dialog: dialog.accept(csv_url))
     frame.locator("#load-custom button.csv-url").click()
-    page.wait_for_url("**/?csv=*")
-    assert page.url == static_server + "/?csv=" + quote(csv_url, safe="")
-    wait_for_boot(page)
-    expect(page.frame_locator("#datasette").locator("footer").first).to_be_attached()
-    assert database_names(page) == ["data"]
+    # Loaded into the running Datasette and added to the URL: see
+    # test_load_buttons.py
+    wait_for_hash(page, "^/data/items$")
+    assert page.url == (
+        static_server + "/?memory=1&csv=" + quote(csv_url, safe="") + "#/data/items"
+    )
+    assert database_names(page) == ["_memory", "data"]
 
 
 def test_github_and_gist_urls_rewritten(page, static_server):

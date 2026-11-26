@@ -1221,22 +1221,22 @@ for sql_url in [url for kind, urls in sources if kind == "sql" for url in urls]:
     with step("Running SQL from " + file_name(sql_url)):
         sqlite3.connect("data.db").executescript(sql)
 
-# Import data from ?csv=URL CSV files/?json=URL JSON files
-import_sources = [source for source in sources if source[0] in ("csv", "json", "parquet")]
-if import_sources:
-    try:
-        # Datasette 1.0 alphas already depend on sqlite-utils 4
-        import sqlite_utils
-    except ImportError:
-        with step("Installing sqlite-utils"):
-            await install_resolving_conflicts("sqlite-utils==3.28")
-        import sqlite_utils
-    from sqlite_utils.utils import rows_from_file, TypeTracker, Format
-    db = sqlite_utils.Database("data.db")
+# Import data from ?csv=URL CSV files/?json=URL JSON files/?parquet=URL files.
+# These functions are also used to load more of them once Datasette is
+# running - see "Loading more data" below.
+IMPORT_TYPES = ("csv", "json", "parquet")
+
+
+def table_names_for(sources):
+    """The table each imported file goes into, named after its URL:
+    {(source_type, index of the URL among those of its type): table}.
+    Names must stay stable: they are part of every shared #/data/table link."""
+    assigned = {}
     table_names = set()
-    for source_type, urls in import_sources:
-        for url in urls:
-            # Derive table name from URL
+    for source_type, urls in sources:
+        if source_type not in IMPORT_TYPES:
+            continue
+        for index, url in enumerate(urls):
             bit = url.split("/")[-1].split(".")[0].split("?")[0]
             bit = bit.strip()
             if not bit:
@@ -1247,96 +1247,126 @@ if import_sources:
                 prefix += 1
                 bit = "{}_{}".format(base_bit, prefix)
             table_names.add(bit)
+            assigned[(source_type, index)] = bit
+    return assigned
 
-            source_bytes = await fetch_bytes(url)
-            import_step = startStep(
-                "Importing {} into table {}".format(file_name(url), bit)
-            )
-            if source_type == "csv":
-                tracker = TypeTracker()
-                csv_bytes = source_bytes
-                with open("csv.csv", "wb") as fp:
-                    fp.write(csv_bytes)
 
-                # Auto-detect CSV delimiter (comma vs semicolon)
-                sample_lines = csv_bytes.decode('utf-8', errors='ignore').splitlines()[:5]
+async def prepare_import(source_type):
+    "Install what import_rows() needs for this type of file"
+    try:
+        # Datasette 1.0 alphas already depend on sqlite-utils 4
+        import sqlite_utils
+    except ImportError:
+        with step("Installing sqlite-utils"):
+            await install_resolving_conflicts("sqlite-utils==3.28")
+    if source_type == "parquet":
+        # pyarrow and pandas come from the Pyodide distribution
+        await micropip.install("pyarrow")
 
-                # Count semicolons vs commas in the sample
-                semicolon_count = sum(line.count(';') for line in sample_lines)
-                comma_count = sum(line.count(',') for line in sample_lines)
 
-                if semicolon_count > comma_count and semicolon_count > 0:
-                    # Use semicolon as delimiter
-                    import csv as csv_module
-                    from io import StringIO
+def import_rows(db, bit, source_type, source_bytes):
+    "Import a file into the table called bit of db, a sqlite_utils.Database"
+    from sqlite_utils.utils import rows_from_file, TypeTracker, Format
+    if source_type == "csv":
+        tracker = TypeTracker()
+        csv_bytes = source_bytes
+        with open("csv.csv", "wb") as fp:
+            fp.write(csv_bytes)
 
-                    csv_content = csv_bytes.decode('utf-8', errors='ignore')
-                    csv_reader = csv_module.reader(StringIO(csv_content), delimiter=';')
-                    rows = list(csv_reader)
+        # Auto-detect CSV delimiter (comma vs semicolon)
+        sample_lines = csv_bytes.decode('utf-8', errors='ignore').splitlines()[:5]
 
-                    if rows:
-                        headers = rows[0]
-                        data_rows = rows[1:]
-                        dict_rows = [dict(zip(headers, row)) for row in data_rows]
+        # Count semicolons vs commas in the sample
+        semicolon_count = sum(line.count(';') for line in sample_lines)
+        comma_count = sum(line.count(',') for line in sample_lines)
 
-                        db[bit].insert_all(
-                            tracker.wrap(dict_rows),
-                            alter=True
-                        )
-                else:
-                    # Use default comma delimiter
-                    db[bit].insert_all(
-                        tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0]),
-                        alter=True
-                    )
+        if semicolon_count > comma_count and semicolon_count > 0:
+            # Use semicolon as delimiter
+            import csv as csv_module
+            from io import StringIO
 
-                db[bit].transform(
-                    types=tracker.types
+            csv_content = csv_bytes.decode('utf-8', errors='ignore')
+            csv_reader = csv_module.reader(StringIO(csv_content), delimiter=';')
+            rows = list(csv_reader)
+
+            if rows:
+                headers = rows[0]
+                data_rows = rows[1:]
+                dict_rows = [dict(zip(headers, row)) for row in data_rows]
+
+                db[bit].insert_all(
+                    tracker.wrap(dict_rows),
+                    alter=True
                 )
-            elif source_type == "json":
-                pk = None
-                json_bytes = source_bytes
-                try:
-                    json_data = json.loads(json_bytes)
-                except json.decoder.JSONDecodeError:
-                    # Maybe it's newline-delimited JSON?
-                    # This will raise an unhandled exception if not
-                    json_data = [json.loads(line) for line in json_bytes.splitlines() if line.strip()]
-                if isinstance(json_data, dict) and all(isinstance(v, dict) for v in json_data.values()):
-                    fixed = []
-                    pk = "_key"
-                    for key, value in json_data.items():
-                        value["_key"] = key
-                        fixed.append(value)
-                    json_data = fixed
-                elif isinstance(json_data, dict):
-                    object_lists = [
-                        value for value in json_data.values()
-                        if (
-                            isinstance(value, list)
-                            and value
-                            and all(isinstance(item, dict) for item in value)
-                        )
-                    ]
-                    if object_lists:
-                        json_data = max(object_lists, key=len)
-                assert isinstance(json_data, list), "JSON data must be a list of objects"
-                db[bit].insert_all(json_data, pk=pk, alter=True)
-            elif source_type == "parquet":
-                # pyarrow and pandas come from the Pyodide distribution
-                await micropip.install("pyarrow")
-                import pyarrow.parquet
-                with open("parquet.parquet", "wb") as fp:
-                    fp.write(source_bytes)
-                df = pyarrow.parquet.read_table("parquet.parquet").to_pandas()
-                # sqlite-utils can't store pandas Timestamps - use ISO strings
-                for column in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
-                    df[column] = df[column].map(
-                        lambda value: None if value != value else value.isoformat()
-                    )
-                db[bit].insert_all(df.to_dict(orient="records"), alter=True)
+        else:
+            # Use default comma delimiter
+            db[bit].insert_all(
+                tracker.wrap(rows_from_file(open("csv.csv", "rb"), Format.CSV)[0]),
+                alter=True
+            )
+
+        db[bit].transform(
+            types=tracker.types
+        )
+    elif source_type == "json":
+        pk = None
+        json_bytes = source_bytes
+        try:
+            json_data = json.loads(json_bytes)
+        except json.decoder.JSONDecodeError:
+            # Maybe it's newline-delimited JSON?
+            # This will raise an unhandled exception if not
+            json_data = [json.loads(line) for line in json_bytes.splitlines() if line.strip()]
+        if isinstance(json_data, dict) and all(isinstance(v, dict) for v in json_data.values()):
+            fixed = []
+            pk = "_key"
+            for key, value in json_data.items():
+                value["_key"] = key
+                fixed.append(value)
+            json_data = fixed
+        elif isinstance(json_data, dict):
+            object_lists = [
+                value for value in json_data.values()
+                if (
+                    isinstance(value, list)
+                    and value
+                    and all(isinstance(item, dict) for item in value)
+                )
+            ]
+            if object_lists:
+                json_data = max(object_lists, key=len)
+        assert isinstance(json_data, list), "JSON data must be a list of objects"
+        db[bit].insert_all(json_data, pk=pk, alter=True)
+    elif source_type == "parquet":
+        import pyarrow.parquet
+        with open("parquet.parquet", "wb") as fp:
+            fp.write(source_bytes)
+        df = pyarrow.parquet.read_table("parquet.parquet").to_pandas()
+        # sqlite-utils can't store pandas Timestamps - use ISO strings
+        for column in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+            df[column] = df[column].map(
+                lambda value: None if value != value else value.isoformat()
+            )
+        db[bit].insert_all(df.to_dict(orient="records"), alter=True)
+
+
+import_sources = [source for source in sources if source[0] in IMPORT_TYPES]
+if import_sources:
+    for source_type, urls in import_sources:
+        await prepare_import(source_type)
+    import sqlite_utils
+    db = sqlite_utils.Database("data.db")
+    table_names = table_names_for(sources)
+    for source_type, urls in import_sources:
+        for index, url in enumerate(urls):
+            bit = table_names[(source_type, index)]
+            source_bytes = await fetch_bytes(url)
+            with step("Importing {} into table {}".format(file_name(url), bit)):
+                import_rows(db, bit, source_type, source_bytes)
             del source_bytes
-            finishStep(import_step)
+    # Datasette opens the file itself
+    db.conn.close()
+    del db
 
 starting_step = startStep("Starting Datasette")
 metadata = {
@@ -1659,6 +1689,156 @@ def cancel_request(request_id):
         stream.disconnect()
 `;
 
+// PYTHON-BEGIN load
+const LOAD_PY = String.raw`
+# --- Loading more data --------------------------------------------------------
+#
+# The "Load CSV" etc buttons add a file to the Datasette that is already
+# running, rather than reloading the page with one more ?csv= in its URL.
+# The page adds that to its URL afterwards, so what is loaded here has to be
+# exactly what loading that URL from scratch would produce: the same database
+# and table names. Where it would not be, these return None and the page
+# reloads instead.
+import os
+from datasette.database import Database
+
+SOURCE_ORDER = ("csv", "sql", "json", "parquet")
+# fixtures.db and content.db, when nothing in the page's URL said what to load
+default_files = list(settings["default_files"])
+
+
+def sources_with(sources, source_type, url):
+    "sources with one more URL, in the order startup would have them"
+    by_type = {kind: list(urls) for kind, urls in sources}
+    by_type.setdefault(source_type, []).append(url)
+    return [[kind, by_type[kind]] for kind in SOURCE_ORDER if kind in by_type]
+
+
+def remove_default_databases():
+    """A URL that says what to load does not get the default databases, so
+    they go as soon as something is loaded here."""
+    for name in default_files:
+        for database in list(ds.databases.values()):
+            if database.path == name:
+                ds.remove_database(database.name)
+                if hasattr(database, "close"):
+                    database.close()
+        if name in names:
+            names.remove(name)
+        if os.path.exists(name):
+            os.remove(name)
+    del default_files[:]
+
+
+def database_for_file(name):
+    for database in ds.databases.values():
+        if database.path == name:
+            return database
+    return None
+
+
+def move_data_database_last():
+    # data.db comes after the ?url= databases when a page loads
+    data = database_for_file("data.db")
+    if data is not None:
+        databases = ds.databases.copy()
+        databases[data.name] = databases.pop(data.name)
+        ds.databases = databases
+
+
+async def refresh_catalog():
+    """Datasette 1.0 lists databases and tables from a catalog that it brings
+    up to date at most once a second: do it now, so that the page shown next
+    has what was just loaded."""
+    refresh = getattr(ds, "refresh_schemas", None)
+    if refresh is None:
+        return
+    if "force" in inspect.signature(refresh).parameters:
+        await refresh(force=True)
+    else:
+        await refresh()
+
+
+async def load_database(name, url):
+    """Add the SQLite database at url, saved as the file called name.
+    Returns the path of its page, or None if the page has to reload."""
+    if os.path.exists(name) and name not in default_files:
+        return None
+    content = await fetch_bytes(url)
+    remove_default_databases()
+    with open(name, "wb") as fp:
+        fp.write(content)
+    del content
+    database = ds.add_database(Database(ds, name, is_mutable=True))
+    names.append(name)
+    if "data.db" in names:
+        names.remove("data.db")
+        names.append("data.db")
+    move_data_database_last()
+    await refresh_catalog()
+    return ds.urls.database(database.name)
+
+
+async def load_source(source_type, url):
+    """Run the SQL file at url against data.db, or import the CSV, JSON or
+    Parquet file there into a table of it. Returns the path of the page to
+    show, or None if the page has to reload."""
+    global sources
+    new_sources = sources_with(sources, source_type, url)
+    table = None
+    if source_type in IMPORT_TYPES:
+        old_tables = table_names_for(sources)
+        new_tables = table_names_for(new_sources)
+        if any(new_tables[key] != old_table for key, old_table in old_tables.items()):
+            # Loading the new URL would give a table already here another name
+            return None
+        table = new_tables[(source_type, len(dict(new_sources)[source_type]) - 1)]
+        await prepare_import(source_type)
+    source_bytes = await fetch_bytes(url)
+    data = database_for_file("data.db")
+    if data is None:
+        sqlite3.connect("data.db").execute("vacuum")
+        data = ds.add_database(Database(ds, "data.db", is_mutable=True))
+        names.append("data.db")
+
+    # Through Datasette's own connection for writing to the database
+    if table is None:
+        sql = source_bytes.decode("utf-8")
+        with step("Running SQL from " + file_name(url)):
+            await data.execute_write_fn(lambda conn: conn.executescript(sql), block=True)
+        path = ds.urls.database(data.name)
+    else:
+        import sqlite_utils
+
+        def write(conn):
+            db = sqlite_utils.Database(conn)
+            existed = db[table].exists()
+            try:
+                import_rows(db, table, source_type, source_bytes)
+            except Exception:
+                if not existed:
+                    # Do not leave half a table behind
+                    try:
+                        conn.rollback()
+                        db[table].drop(ignore=True)
+                    except Exception:
+                        pass
+                raise
+
+        with step("Importing {} into table {}".format(file_name(url), table)):
+            await data.execute_write_fn(write, block=True)
+        path = ds.urls.table(data.name, table)
+    sources = new_sources
+    remove_default_databases()
+    await refresh_catalog()
+    return path
+`;
+// PYTHON-END load
+
+// What the running Datasette has loaded, for loadMore()
+let loadedSqliteUrls = [];
+let loadedDatabaseFiles = [];
+
 // ?install= is something for micropip to install - the name of a package
 // on PyPI, usually - or a GitHub repository to run a plugin from the source
 // of. HEAD is the repository's default branch.
@@ -1727,7 +1907,9 @@ async function startDatasette(settings) {
   const installs = parseInstalls(settings.installUrls);
   const sqliteUrls = (settings.sqliteUrls || []).filter(Boolean);
   if (sqliteUrls.length) {
-    toLoad.push(...databaseFiles(sqliteUrls));
+    loadedSqliteUrls = sqliteUrls;
+    loadedDatabaseFiles = databaseFiles(sqliteUrls);
+    toLoad.push(...loadedDatabaseFiles);
     shouldLoadDefaults = false;
   }
   ['csv', 'sql', 'json', 'parquet'].forEach(sourceType => {
@@ -1780,6 +1962,7 @@ async function startDatasette(settings) {
   // Values are passed as data, never interpolated into Python source
   pyodide.globals.set("settings_json", JSON.stringify({
     to_load: toLoad,
+    default_files: shouldLoadDefaults ? toLoad.map(([name]) => name) : [],
     sources,
     datasette_to_install: datasetteToInstall,
     datasette_source_url: datasetteSourceUrl,
@@ -1798,9 +1981,39 @@ async function startDatasette(settings) {
   await pyodide.runPythonAsync(BRIDGE_PY);
   await pyodide.runPythonAsync(STARTUP_PY);
   await pyodide.runPythonAsync(HANDLE_PY);
+  await pyodide.runPythonAsync(LOAD_PY);
   self.pyHandleRequest = pyodide.globals.get("handle_request");
   self.pyCancelRequest = pyodide.globals.get("cancel_request");
+  self.pyLoadDatabase = pyodide.globals.get("load_database");
+  self.pyLoadSource = pyodide.globals.get("load_source");
   self.pyChangePlugins = pyodide.globals.get("change_plugins");
+}
+
+// Loads one more file into the Datasette that is running - the "Load CSV" etc
+// buttons. param is the URL parameter that loads that type of file when the
+// page loads: url, csv, json, parquet or sql. Resolves to {path}, the page to
+// show, or to {reload: true} if this can only be done by loading the page
+// again with the file in its URL - see LOAD_PY.
+async function loadMore(param, url) {
+  let path;
+  if (param == 'url') {
+    const urls = [...loadedSqliteUrls, url];
+    const files = databaseFiles(urls);
+    // Another URL can change the names given to the ones before it
+    if (loadedDatabaseFiles.some(([name], index) => files[index][0] != name)) {
+      return {reload: true};
+    }
+    path = await self.pyLoadDatabase(files[files.length - 1][0], url);
+    if (path) {
+      loadedSqliteUrls = urls;
+      loadedDatabaseFiles = files;
+    }
+  } else if (['csv', 'json', 'parquet', 'sql'].includes(param)) {
+    path = await self.pyLoadSource(param, url);
+  } else {
+    throw new Error("Cannot load " + param);
+  }
+  return path ? {path} : {reload: true};
 }
 
 // Answers one request. A response that Datasette sends in a single piece is
@@ -1884,6 +2097,15 @@ self.onmessage = async (event) => {
         type: 'response', id: data.id, status: 500,
         headers: [["content-type", "text/plain; charset=utf-8"]], body
       }, [body]);
+    }
+    return;
+  }
+  if (data.type == 'load') {
+    try {
+      await readyPromise;
+      self.postMessage({type: 'loaded', id: data.id, ...await loadMore(data.param, data.url)});
+    } catch (error) {
+      self.postMessage({type: 'loaded', id: data.id, error: (error && error.message) || String(error)});
     }
     return;
   }

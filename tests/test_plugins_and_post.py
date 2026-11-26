@@ -152,10 +152,12 @@ def test_plugin_datasette_vega(page, static_server):
 
 def test_plugin_datasette_copyable(page, static_server):
     "Custom output formats from a register_output_renderer plugin"
+    # ref=stable: datasette-copyable 0.3.3 imports path_with_replaced_args,
+    # which Datasette 1.0a44 removed from datasette.utils
     frame = boot(
         page,
         static_server
-        + "/?install=datasette-copyable&csv=" + F + "items.csv#/data/items.copyable?_table_format=github",
+        + "/?ref=stable&install=datasette-copyable&csv=" + F + "items.csv#/data/items.copyable?_table_format=github",
     )
     expect(frame.locator("textarea.copyable")).to_contain_text("| Widget")
 

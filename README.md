@@ -78,6 +78,16 @@ The chosen version is used for everything: by Datasette, by plugins that `import
 
 Old versions of SQLite are not blocked. If Datasette cannot run on one, you will see the error from Datasette.
 
+## The "Load" buttons
+
+Every page has buttons at the bottom for loading a SQLite database, CSV, JSON, Parquet or SQL file by its URL. Once Datasette is running these load the file into it without reloading the page - a CSV becomes another table in the `data` database, a SQLite file another database - and show you what was loaded.
+
+The matching parameter (`?url=`, `?csv=`, `?json=`, `?parquet=` or `?sql=`, each described below) is then added to the URL in your browser's address bar, after anything already there, so that URL is still a link to exactly what you are looking at.
+
+The `fixtures` and `content` databases you get when a URL does not say what to load are removed the first time you load something, since the new URL would not load them. In the rare case where adding a file would change the name of a database or table that is already loaded, the page reloads with the new URL instead.
+
+While Datasette is still starting up - or if it failed to start - the buttons start again with just the file you picked.
+
 ## Loading CSV data
 
 You can load data from a CSV file hosted online (provided it allows `access-control-allow-origin: *`) by passing that URL as a `?csv=` parameter - or by clicking the "Load CSV by URL" button and pasting in a URL.
