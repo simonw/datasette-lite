@@ -12,13 +12,13 @@ jobs:
     # ubuntu-latest is now 26.04, which Playwright 1.55 does not support
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
     - name: Set up Python 3.12
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v7
       with:
         python-version: "3.12"
     - name: Cache Playwright browsers
-      uses: actions/cache@v3
+      uses: actions/cache@v6
       with:
         path: ~/.cache/ms-playwright/
         key: ${{ runner.os }}-browsers
