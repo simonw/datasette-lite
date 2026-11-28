@@ -1091,12 +1091,23 @@ async def install_plugin(install, in_place=False):
     change_plugins(). A package that has been imported cannot be swapped for
     another version, so a conflict is then left as the error it is."""
     if not install["source_url"]:
-        with step("Installing " + install["requirement"]):
+        name = requirement_name(install["requirement"])
+        with step("Installing " + install["requirement"]) as plugin_step:
             if in_place:
                 await micropip.install(install["requirement"], pre=settings["pre"])
             else:
                 await install_resolving_conflicts(install["requirement"], pre=settings["pre"])
-        return requirement_name(install["requirement"])
+            # Named once it is known which version that is. The URL of a
+            # wheel already says, and is left as it is.
+            if name and ".whl" not in install["requirement"]:
+                try:
+                    renameStep(plugin_step, "Installing {} {}".format(
+                        re.match(r"[A-Za-z0-9._-]+", install["requirement"].strip()).group(0),
+                        importlib.metadata.version(name),
+                    ))
+                except importlib.metadata.PackageNotFoundError:
+                    pass
+        return name
     # ?install=owner/repo, owner/repo@ref or a GitHub URL: run the plugin
     # from the source in that repository
     with step("Installing " + install["repo"]) as plugin_step:
