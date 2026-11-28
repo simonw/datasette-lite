@@ -135,6 +135,9 @@ def test_plugin_datasette_cluster_map(page, static_server):
     # table's .json and renders a Leaflet map with a marker cluster
     expect(frame.locator(".leaflet-container")).to_be_visible(timeout=30 * 1000)
     expect(frame.locator(".marker-cluster, .leaflet-marker-icon").first).to_be_attached(timeout=30 * 1000)
+    # The step is named once it is known which version was installed
+    steps = page.locator("#loading-logs li .step-label").all_text_contents()
+    assert [step for step in steps if re.fullmatch(r"Installing datasette-cluster-map \d\S*", step)]
 
 
 def test_plugin_datasette_vega(page, static_server):
